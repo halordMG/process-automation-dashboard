@@ -1,0 +1,442 @@
+-- ============================================================
+-- Process Automation Monitoring Dashboard - MySQL Schema
+-- ============================================================
+-- Database: process_automation_db
+-- Description: Full schema for projects, users, departments,
+--              stages, activity logs with role-based access.
+-- ============================================================
+
+-- Drop database if exists (for clean setup)
+-- DROP DATABASE IF EXISTS process_automation_db;
+
+CREATE DATABASE IF NOT EXISTS process_automation_db
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+
+USE process_automation_db;
+
+-- ============================================================
+-- 1. DEPARTMENTS TABLE
+-- ============================================================
+CREATE TABLE departments (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    department_name VARCHAR(100) NOT NULL UNIQUE,
+    description     VARCHAR(255) DEFAULT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    INDEX idx_department_name (department_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 2. USERS TABLE (Role-based access)
+-- ============================================================
+CREATE TABLE users (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    username        VARCHAR(50)  NOT NULL UNIQUE,
+    password_hash   VARCHAR(255) NOT NULL,
+    full_name       VARCHAR(100) NOT NULL,
+    email           VARCHAR(150) DEFAULT NULL UNIQUE,
+    role            ENUM('admin', 'user') NOT NULL DEFAULT 'user',
+    department_id   INT DEFAULT NULL,
+    is_active       TINYINT(1) NOT NULL DEFAULT 1,
+    last_login      DATETIME DEFAULT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (department_id) REFERENCES departments(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+
+    INDEX idx_username (username),
+    INDEX idx_role (role),
+    INDEX idx_department_id (department_id),
+    INDEX idx_is_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 3. PROJECTS TABLE
+-- ============================================================
+CREATE TABLE projects (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    department_id   INT NOT NULL,
+    project_name    VARCHAR(200) NOT NULL,
+    owner_id        INT DEFAULT NULL,
+    owner_name      VARCHAR(100) NOT NULL,
+    stage           ENUM('Discovery', 'Design', 'Build', 'Test', 'Deploy') NOT NULL DEFAULT 'Discovery',
+    progress        DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+    start_date      DATE DEFAULT NULL,
+    due_date        DATE DEFAULT NULL,
+    priority        ENUM('Low', 'Medium', 'High', 'Critical') NOT NULL DEFAULT 'Medium',
+    status          ENUM('On Track', 'At Risk', 'Delayed', 'Completed') NOT NULL DEFAULT 'On Track',
+    description     TEXT DEFAULT NULL,
+    created_by      INT DEFAULT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (department_id) REFERENCES departments(id)
+        ON DELETE RESTRICT
+        ON UPDATE CASCADE,
+    FOREIGN KEY (owner_id) REFERENCES users(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+
+    INDEX idx_department_id (department_id),
+    INDEX idx_owner_id (owner_id),
+    INDEX idx_stage (stage),
+    INDEX idx_priority (priority),
+    INDEX idx_status (status),
+    INDEX idx_due_date (due_date),
+    INDEX idx_project_name (project_name),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 4. ACTIVITY LOGS TABLE
+-- ============================================================
+CREATE TABLE activity_logs (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    user_id         INT DEFAULT NULL,
+    user_name       VARCHAR(100) NOT NULL,
+    project_id      INT DEFAULT NULL,
+    project_name    VARCHAR(200) DEFAULT NULL,
+    action_type     ENUM('create', 'update', 'delete', 'stage', 'progress', 'priority', 'date', 'general') NOT NULL DEFAULT 'general',
+    description     TEXT NOT NULL,
+    ip_address      VARCHAR(45) DEFAULT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+
+    INDEX idx_user_id (user_id),
+    INDEX idx_project_id (project_id),
+    INDEX idx_action_type (action_type),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 5. PROJECT STAGE HISTORY TABLE (Audit trail per stage)
+-- ============================================================
+CREATE TABLE project_stage_history (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    project_id      INT NOT NULL,
+    from_stage      ENUM('Discovery', 'Design', 'Build', 'Test', 'Deploy') DEFAULT NULL,
+    to_stage        ENUM('Discovery', 'Design', 'Build', 'Test', 'Deploy') NOT NULL,
+    changed_by      INT DEFAULT NULL,
+    changed_by_name VARCHAR(100) NOT NULL,
+    changed_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE,
+    FOREIGN KEY (changed_by) REFERENCES users(id)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE,
+
+    INDEX idx_project_id (project_id),
+    INDEX idx_changed_at (changed_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- 6. USER PERMISSIONS TABLE (Fine-grained permissions)
+-- ============================================================
+CREATE TABLE permissions (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    role            ENUM('admin', 'user') NOT NULL,
+    resource        VARCHAR(50) NOT NULL,
+    can_create      TINYINT(1) NOT NULL DEFAULT 0,
+    can_read        TINYINT(1) NOT NULL DEFAULT 1,
+    can_update      TINYINT(1) NOT NULL DEFAULT 0,
+    can_delete      TINYINT(1) NOT NULL DEFAULT 0,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uk_role_resource (role, resource),
+
+    INDEX idx_role (role),
+    INDEX idx_resource (resource)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- VIEWS
+-- ============================================================
+
+-- Dashboard KPIs View
+CREATE VIEW v_dashboard_kpis AS
+SELECT
+    (SELECT COUNT(*) FROM projects) AS total_projects,
+    (SELECT COUNT(*) FROM projects WHERE stage = 'Deploy') AS deployed_projects,
+    (SELECT COUNT(*) FROM projects WHERE status IN ('At Risk', 'Delayed')) AS at_risk_projects,
+    (SELECT IFNULL(AVG(progress), 0) FROM projects) AS avg_progress,
+    (SELECT COUNT(DISTINCT department_id) FROM projects) AS active_departments;
+
+-- Projects by Stage View
+CREATE VIEW v_projects_by_stage AS
+SELECT
+    stage,
+    COUNT(*) AS project_count,
+    ROUND(AVG(progress), 2) AS avg_progress
+FROM projects
+GROUP BY stage
+ORDER BY FIELD(stage, 'Discovery', 'Design', 'Build', 'Test', 'Deploy');
+
+-- Projects by Department View
+CREATE VIEW v_projects_by_department AS
+SELECT
+    d.department_name,
+    COUNT(p.id) AS project_count,
+    ROUND(AVG(p.progress), 2) AS avg_progress,
+    COUNT(CASE WHEN p.status IN ('At Risk', 'Delayed') THEN 1 END) AS at_risk_count
+FROM departments d
+LEFT JOIN projects p ON d.id = p.department_id
+GROUP BY d.id, d.department_name
+ORDER BY project_count DESC;
+
+-- Overdue Projects View
+CREATE VIEW v_overdue_projects AS
+SELECT
+    p.id,
+    p.project_name,
+    p.owner_name,
+    d.department_name,
+    p.due_date,
+    DATEDIFF(CURDATE(), p.due_date) AS days_overdue,
+    p.progress,
+    p.priority,
+    p.status
+FROM projects p
+JOIN departments d ON p.department_id = d.id
+WHERE p.due_date < CURDATE()
+  AND p.status != 'Completed'
+ORDER BY days_overdue DESC;
+
+-- Recent Activity View
+CREATE VIEW v_recent_activity AS
+SELECT
+    al.id,
+    al.user_name,
+    al.action_type,
+    al.description,
+    al.project_name,
+    al.created_at
+FROM activity_logs al
+ORDER BY al.created_at DESC
+LIMIT 50;
+
+-- ============================================================
+-- STORED PROCEDURES
+-- ============================================================
+
+DELIMITER //
+
+-- Procedure: Get project details with department info
+CREATE PROCEDURE sp_get_project_details(IN p_project_id INT)
+BEGIN
+    SELECT
+        p.id,
+        p.project_name,
+        p.owner_name,
+        d.department_name,
+        p.stage,
+        p.progress,
+        p.start_date,
+        p.due_date,
+        p.priority,
+        p.status,
+        p.description,
+        p.created_at,
+        p.updated_at,
+        u.full_name AS created_by_name
+    FROM projects p
+    JOIN departments d ON p.department_id = d.id
+    LEFT JOIN users u ON p.created_by = u.id
+    WHERE p.id = p_project_id;
+END //
+
+-- Procedure: Update project stage with audit log
+CREATE PROCEDURE sp_update_project_stage(
+    IN p_project_id INT,
+    IN p_new_stage VARCHAR(20),
+    IN p_new_progress DECIMAL(5,2),
+    IN p_user_id INT,
+    IN p_user_name VARCHAR(100)
+)
+BEGIN
+    DECLARE v_old_stage VARCHAR(20);
+
+    SELECT stage INTO v_old_stage FROM projects WHERE id = p_project_id;
+
+    UPDATE projects
+    SET stage = p_new_stage,
+        progress = p_new_progress,
+        updated_at = NOW()
+    WHERE id = p_project_id;
+
+    INSERT INTO project_stage_history (project_id, from_stage, to_stage, changed_by, changed_by_name)
+    VALUES (p_project_id, v_old_stage, p_new_stage, p_user_id, p_user_name);
+
+    INSERT INTO activity_logs (user_id, user_name, project_id, action_type, description)
+    VALUES (p_user_id, p_user_name, p_project_id, 'stage',
+            CONCAT('Stage changed from ', v_old_stage, ' to ', p_new_stage));
+END //
+
+-- Procedure: Get dashboard summary
+CREATE PROCEDURE sp_get_dashboard_summary()
+BEGIN
+    SELECT
+        (SELECT COUNT(*) FROM projects) AS total_projects,
+        (SELECT COUNT(*) FROM projects WHERE stage = 'Deploy') AS deployed,
+        (SELECT COUNT(*) FROM projects WHERE status IN ('At Risk', 'Delayed')) AS at_risk,
+        (SELECT ROUND(AVG(progress), 2) FROM projects) AS avg_progress,
+        (SELECT COUNT(*) FROM users WHERE is_active = 1) AS active_users,
+        (SELECT COUNT(*) FROM departments) AS total_departments;
+END //
+
+-- Procedure: Get projects by department
+CREATE PROCEDURE sp_get_projects_by_department(IN p_department_id INT)
+BEGIN
+    SELECT
+        p.id,
+        p.project_name,
+        p.owner_name,
+        p.stage,
+        p.progress,
+        p.due_date,
+        p.priority,
+        p.status
+    FROM projects p
+    WHERE p.department_id = p_department_id
+    ORDER BY p.priority DESC, p.due_date ASC;
+END //
+
+DELIMITER ;
+
+-- ============================================================
+-- SEED DATA
+-- ============================================================
+
+-- Departments
+INSERT INTO departments (department_name, description) VALUES
+('InFlex (IT Team)', 'Information Technology team'),
+('AILabU (YFS Sales Team)', 'AI Laboratory - Sales'),
+('HRWonders (HR Team)', 'Human Resources team'),
+('Quantum (CH Accounting)', 'Accounting and Finance team'),
+('VJCarie (Finance Team)', 'Finance Operations team'),
+('O.T.O.G (TMU Operations Team)', 'TMU Operations team'),
+('Mighty Movers (Supply Chain Team)', 'Supply Chain Management team'),
+('MOKI (MKI Team)', 'Marketing and Knowledge Integration team'),
+('Brandify (Trade Marketing)', 'Trade Marketing team');
+
+-- Users (password_hash values are SHA256 hashes of the demo passwords)
+-- admin123 = 240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9
+-- harold123 = 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8 (placeholder)
+-- niel123 = 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8 (placeholder)
+-- In production, use bcrypt/argon2 hashing
+INSERT INTO users (username, password_hash, full_name, email, role, department_id, is_active) VALUES
+('admin', SHA2('admin123', 256), 'System Administrator', 'admin@company.com', 'admin', 1, 1),
+('harold', SHA2('harold123', 256), 'Harold Bumanlag', 'harold@company.com', 'user', 1, 1),
+('niel', SHA2('niel123', 256), 'Niel', 'niel@company.com', 'user', 1, 1),
+('ivan', SHA2('ivan123', 256), 'Ivan', 'ivan@company.com', 'user', 1, 1),
+('jireh', SHA2('jireh123', 256), 'Jireh', 'jireh@company.com', 'user', 1, 1),
+('kong', SHA2('kong123', 256), 'Kong', 'kong@company.com', 'user', 2, 1),
+('julie', SHA2('julie123', 256), 'Julie', 'julie@company.com', 'user', 3, 1),
+('rodavallo', SHA2('rodavallo123', 256), 'Rodavallo', 'rodavallo@company.com', 'user', 4, 1),
+('raquel', SHA2('raquel123', 256), 'Raquel', 'raquel@company.com', 'user', 5, 1),
+('leony', SHA2('leony123', 256), 'Leony', 'leony@company.com', 'user', 6, 1),
+('jake', SHA2('jake123', 256), 'Jake', 'jake@company.com', 'user', 7, 1),
+('jennybel', SHA2('jennybel123', 256), 'Jennybel', 'jennybel@company.com', 'user', 8, 1),
+('geille', SHA2('geille123', 256), 'Geille', 'geille@company.com', 'user', 9, 1);
+
+-- Projects (based on Excel data)
+INSERT INTO projects (department_id, project_name, owner_id, owner_name, stage, progress, start_date, due_date, priority, status, description, created_by) VALUES
+(1, 'Asset Management System', 3, 'Niel', 'Build', 60.00, '2026-03-01', '2026-07-15', 'High', 'On Track', 'Automated asset tracking and management system', 1),
+(1, 'IT Asset Purchase Request Automation', 4, 'Ivan', 'Build', 50.00, '2026-03-15', '2026-07-30', 'Medium', 'On Track', 'Automate IT asset purchase request workflow', 1),
+(1, 'Automated Item New Entry (Business Central)', 5, 'Jireh', 'Build', 50.00, '2026-04-01', '2026-08-01', 'Medium', 'On Track', 'Auto-create new item entries in Business Central', 1),
+(1, 'Execom L10 Automation', 2, 'Harold', 'Build', 60.00, '2026-02-15', '2026-06-30', 'High', 'At Risk', 'L10 executive communication automation', 1),
+(1, 'Process Automation Monitoring Dashboard', 2, 'Harold', 'Build', 25.00, '2026-05-01', '2026-08-15', 'High', 'On Track', 'Central dashboard for tracking process automation projects', 1),
+(2, 'Gaisano Group Customer Review Dashboard', 6, 'Kong', 'Test', 70.00, '2026-01-20', '2026-06-30', 'Critical', 'On Track', 'Customer review analytics dashboard for Gaisano Group', 1),
+(3, 'Recruitment and Selection Automation', 7, 'Julie', 'Build', 60.00, '2026-03-01', '2026-07-01', 'High', 'On Track', 'Automate HR recruitment and selection process', 1),
+(4, 'Inventory Management and Reconciliation', 8, 'Rodavallo', 'Test', 25.00, '2026-02-01', '2026-06-15', 'Critical', 'Delayed', 'Automated inventory reconciliation and management', 1),
+(5, 'Cash Flow Automation', 9, 'Raquel', 'Deploy', 30.00, '2026-01-01', '2026-05-31', 'Critical', 'Completed', 'Automated cash flow forecasting and reporting', 1),
+(6, 'TMU Demand Planning System', 10, 'Leony', 'Build', 60.00, '2026-03-15', '2026-08-01', 'Medium', 'On Track', 'Demand planning and forecasting system for TMU', 1),
+(7, 'Fleet Dispatch Prediction Automation', 11, 'Jake', 'Build', 25.00, '2026-04-01', '2026-09-01', 'Medium', 'On Track', 'AI-powered fleet dispatch prediction system', 1),
+(8, 'MK Digital Order Management System', 12, 'Jennybel', 'Build', 60.00, '2026-02-20', '2026-07-20', 'High', 'On Track', 'Personalized digital order management system', 1),
+(9, 'YFS Label Design System', 13, 'Geille', 'Build', 60.00, '2026-03-10', '2026-07-10', 'Medium', 'On Track', 'Automated label design system for YFS products', 1);
+
+-- Activity Logs (seed)
+INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description) VALUES
+(9, 'Raquel', 9, 'Cash Flow Automation', 'stage', 'Cash Flow Automation moved to Deploy stage'),
+(6, 'Kong', 6, 'Gaisano Group Customer Review Dashboard', 'progress', 'Gaisano Group Dashboard progress updated to 70%'),
+(8, 'Rodavallo', 8, 'Inventory Management and Reconciliation', 'priority', 'Inventory Management flagged as delayed'),
+(2, 'Harold', 5, 'Process Automation Monitoring Dashboard', 'create', 'New project added: Process Automation Monitoring Dashboard'),
+(13, 'Geille', 13, 'YFS Label Design System', 'progress', 'YFS Label Design System progress updated to 60%'),
+(1, 'System Administrator', NULL, NULL, 'general', 'Database initialized with seed data');
+
+-- Permissions
+INSERT INTO permissions (role, resource, can_create, can_read, can_update, can_delete) VALUES
+('admin', 'projects', 1, 1, 1, 1),
+('admin', 'users', 1, 1, 1, 1),
+('admin', 'reports', 1, 1, 1, 0),
+('admin', 'settings', 1, 1, 1, 0),
+('user', 'projects', 1, 1, 1, 0),
+('user', 'users', 0, 0, 0, 0),
+('user', 'reports', 0, 1, 0, 0),
+('user', 'settings', 0, 1, 0, 0);
+
+-- ============================================================
+-- TRIGGERS
+-- ============================================================
+
+DELIMITER //
+
+-- Auto-log project creation
+CREATE TRIGGER trg_project_created
+AFTER INSERT ON projects
+FOR EACH ROW
+BEGIN
+    INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
+    VALUES (NEW.created_by, COALESCE((SELECT full_name FROM users WHERE id = NEW.created_by), 'System'), NEW.id, NEW.project_name, 'create', CONCAT('Project "', NEW.project_name, '" was created'));
+END //
+
+-- Auto-log project updates (when stage changes)
+CREATE TRIGGER trg_project_updated
+AFTER UPDATE ON projects
+FOR EACH ROW
+BEGIN
+    IF OLD.stage != NEW.stage THEN
+        INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
+        VALUES (NULL, 'System', NEW.id, NEW.project_name, 'stage', CONCAT('Stage changed from ', OLD.stage, ' to ', NEW.stage));
+    END IF;
+    IF OLD.progress != NEW.progress THEN
+        INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
+        VALUES (NULL, 'System', NEW.id, NEW.project_name, 'progress', CONCAT('Progress updated from ', OLD.progress, '% to ', NEW.progress, '%'));
+    END IF;
+END //
+
+DELIMITER ;
+
+-- ============================================================
+-- SAMPLE QUERIES (commented out - run manually)
+-- ============================================================
+
+-- Get all projects with department info:
+-- SELECT p.*, d.department_name FROM projects p JOIN departments d ON p.department_id = d.id;
+
+-- Get overdue projects:
+-- SELECT * FROM v_overdue_projects;
+
+-- Get projects by owner:
+-- SELECT owner_name, COUNT(*) AS project_count, ROUND(AVG(progress), 2) AS avg_progress
+-- FROM projects GROUP BY owner_name ORDER BY project_count DESC;
+
+-- Get user permissions:
+-- SELECT * FROM permissions WHERE role = 'user';
+
+-- Search projects:
+-- SELECT * FROM projects WHERE project_name LIKE '%Automation%' OR owner_name LIKE '%Harold%';

@@ -1,6 +1,38 @@
 node_modules/
 .env
 .env.local
+.env.webstation
 *.log
 .DS_Store
 Thumbs.db
+
+# Large files not needed for deployment
+*.pdf
+*.docx
+*.xlsx
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.zip
+*.mp4
+*.mov
+*.skill
+
+# Local dev files
+database.sqlite*
+backup/
+nas-deploy/
+synology-deploy/
+synology-webstation-deploy/
+video-output/
+presentation-screenshots/
+excel_*.txt
+excel_*.csv
+
+# Exclude original HTML (we use index.html for GitHub Pages)
+ProcessAutomationDashboard.html
+
+# Docker (not used for Render)
+Dockerfile
+docker-compose.yml
