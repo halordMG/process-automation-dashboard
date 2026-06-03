@@ -12,11 +12,12 @@ CREATE TABLE IF NOT EXISTS departments (
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username VARCHAR(50) NOT NULL UNIQUE,
-    password VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(100) NOT NULL,
     email VARCHAR(100),
     role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
     department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -86,8 +87,12 @@ INSERT INTO departments (department_name) VALUES
     ('Brandify (Trade Marketing)')
 ON CONFLICT (department_name) DO NOTHING;
 
--- Seed admin user (password: admin123, hashed with bcrypt)
--- Note: Change this in production - generate your own hash
-INSERT INTO users (username, password, full_name, role, department_id) VALUES
-    ('admin', '$2b$10$X7Z8K9YqL3mN4pQ5rS6tUeVwXyZ1A2B3C4D5E6F7G8H9I0J1K2L3M4N', 'Admin User', 'admin', 1)
+-- Seed admin user (password: admin123, SHA-256 hash)
+INSERT INTO users (username, password_hash, full_name, role, department_id, is_active) VALUES
+    ('admin', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'Admin User', 'admin', 1, 1)
+ON CONFLICT (username) DO NOTHING;
+
+-- Seed regular user (password: harold123, SHA-256 hash)
+INSERT INTO users (username, password_hash, full_name, role, department_id, is_active) VALUES
+    ('harold', '9d16d1b075170ed04f84b5c351a7fdb254736147d57538eeb5da9f4b18522804', 'Harold User', 'user', 1, 1)
 ON CONFLICT (username) DO NOTHING;
