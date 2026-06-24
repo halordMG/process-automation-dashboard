@@ -49,11 +49,13 @@ http://localhost:3001/ProcessAutomationDashboard.html
 
 ## Demo Accounts
 
-| Username | Password | Role |
-|----------|----------|------|
-| admin | admin123 | Admin |
-| harold | harold123 | User |
-| niel | niel123 | User |
+Demo passwords are configured through environment variables (`SEED_ADMIN_PASSWORD`, `SEED_DEFAULT_PASSWORD`) and rendered into the seed SQL by `scripts/render-seed-sql.js`.
+
+| Username | Role |
+|----------|------|
+| admin | Admin |
+| harold | User |
+| niel | User |
 
 ## API Endpoints
 

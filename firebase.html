@@ -6,9 +6,13 @@
   <title>Process Automation Monitoring Dashboard</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.27.1/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="env.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -56,95 +60,346 @@
     const { useState, useMemo, useEffect, useCallback } = React;
 
     // ============================================================
-    // API CONFIG — Supports GitHub Pages + external backend (NAS, Render, etc.)
-    // Usage: add ?api=http://your-nas-ip:3001/api to URL once, or set via localStorage
+    // FIREBASE FIRESTORE CONFIG — Loaded from env.js (window.ENV)
     // ============================================================
-    const API_BASE = (() => {
-      try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const paramApi = urlParams.get('api');
-        if (paramApi) {
-          localStorage.setItem('pad_api_url', paramApi);
-          history.replaceState(null, '', window.location.pathname);
-          return paramApi;
-        }
-        const saved = localStorage.getItem('pad_api_url');
-        if (saved) return saved;
-      } catch (e) {}
-      return `${window.location.protocol}//${window.location.host}/api`;
-    })();
+    const firebaseConfig = (typeof window !== 'undefined' && window.ENV && window.ENV.FIREBASE_CONFIG) || {};
+
+    var db = null;
+    var firestoreReady = false;
+    try {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+      db.enablePersistence({ synchronizeTabs: true }).catch(err => {
+        console.warn('[Firebase] Persistence failed:', err.code);
+      });
+    } catch (e) {
+      console.error('[Firebase] Init failed:', e);
+    }
+
     const STAGES = ['Discovery', 'Design', 'Build', 'Test', 'Deploy'];
     const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
     const DEPARTMENTS = ['InFlex (IT Team)', 'AILabU (YFS Sales Team)', 'HRWonders (HR Team)', 'Quantum (CH Accounting)', 'VJCarie (Finance Team)', 'O.T.O.G (TMU Operations Team)', 'Mighty Movers (Supply Chain Team)', 'MOKI (MKI Team)', 'Brandify (Trade Marketing)'];
 
+    const TOKEN_KEY = 'pad_firebase_token';
+
+    function sha256(text) {
+      const crypto = window.crypto || window.msCrypto;
+      if (!crypto) return text;
+      const encoder = new TextEncoder();
+      return crypto.subtle.digest('SHA-256', encoder.encode(text)).then(buf => {
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      });
+    }
+
+    // Seed data for first-run — password hashes must be set via admin UI before use
+    const SEED_USERS = [
+      { username: 'admin', password_hash: '', full_name: 'Admin User', email: 'admin@ysu.com', role: 'admin', department_id: 1, is_active: 1 },
+      { username: 'harold', password_hash: '', full_name: 'Harold User', email: 'harold@ysu.com', role: 'user', department_id: 1, is_active: 1 }
+    ];
+    const SEED_DEPARTMENTS = [
+      { department_name: 'InFlex (IT Team)' },
+      { department_name: 'AILabU (YFS Sales Team)' },
+      { department_name: 'HRWonders (HR Team)' },
+      { department_name: 'Quantum (CH Accounting)' },
+      { department_name: 'VJCarie (Finance Team)' },
+      { department_name: 'O.T.O.G (TMU Operations Team)' },
+      { department_name: 'Mighty Movers (Supply Chain Team)' },
+      { department_name: 'MOKI (MKI Team)' },
+      { department_name: 'Brandify (Trade Marketing)' }
+    ];
+    const SEED_PROJECTS = [
+      { department_id: 1, project_name: 'Website Redesign', owner_name: 'Admin User', owner_id: 1, stage: 'Design', progress: 45, start_date: '2026-05-01', due_date: '2026-07-15', priority: 'High', status: 'On Track', description: 'Redesign company website', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      { department_id: 2, project_name: 'Sales CRM Integration', owner_name: 'Harold User', owner_id: 2, stage: 'Build', progress: 60, start_date: '2026-04-10', due_date: '2026-06-30', priority: 'Critical', status: 'At Risk', description: 'Integrate CRM with sales pipeline', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      { department_id: 3, project_name: 'HR Onboarding Portal', owner_name: 'Admin User', owner_id: 1, stage: 'Discovery', progress: 15, start_date: '2026-06-01', due_date: '2026-08-01', priority: 'Medium', status: 'On Track', description: 'New employee onboarding system', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    ];
+    const SEED_ACTIVITY = [
+      { project_id: 1, user_id: 1, user_name: 'Admin User', action_type: 'create', description: 'Created project Website Redesign', old_value: null, new_value: null, created_at: new Date().toISOString() },
+      { project_id: 2, user_id: 2, user_name: 'Harold User', action_type: 'create', description: 'Created project Sales CRM Integration', old_value: null, new_value: null, created_at: new Date().toISOString() }
+    ];
+    const SEED_EMAIL = { smtp_host: 'smtp.zoho.com', smtp_port: 587, smtp_secure: false, smtp_user: '', smtp_pass: '', from_name: 'Process Automation Dashboard', from_email: '', enabled: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+
+    async function seedFirestoreIfEmpty() {
+      if (!db) return;
+      const cols = [
+        { name: 'users', data: SEED_USERS },
+        { name: 'departments', data: SEED_DEPARTMENTS },
+        { name: 'projects', data: SEED_PROJECTS },
+        { name: 'activity', data: SEED_ACTIVITY }
+      ];
+      for (const col of cols) {
+        const snap = await db.collection(col.name).limit(1).get();
+        if (snap.empty && col.data.length > 0) {
+          const batch = db.batch();
+          col.data.forEach(item => {
+            const ref = db.collection(col.name).doc();
+            batch.set(ref, item);
+          });
+          await batch.commit();
+          console.log('[Firebase] Seeded', col.name);
+        }
+      }
+      const emailSnap = await db.collection('email_settings').limit(1).get();
+      if (emailSnap.empty) {
+        await db.collection('email_settings').doc('default').set(SEED_EMAIL);
+        console.log('[Firebase] Seeded email_settings');
+      }
+    }
+
+    async function addActivity(user, action, desc, oldVal, newVal, projectId) {
+      if (!db) return;
+      try {
+        await db.collection('activity').add({
+          project_id: projectId || null,
+          user_id: user?.id || null,
+          user_name: user?.full_name || 'System',
+          action_type: action,
+          description: desc,
+          old_value: oldVal,
+          new_value: newVal,
+          created_at: new Date().toISOString()
+        });
+      } catch (e) { console.error('[Firebase] Activity log failed:', e); }
+    }
+
     // ============================================================
-    // API SERVICE
+    // FIRESTORE API SERVICE
     // ============================================================
     const api = {
-      async request(endpoint, options = {}) {
-        const token = window.__authToken;
-        const url = `${API_BASE}${endpoint}`;
-        const config = {
-          ...options,
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-            ...options.headers
-          }
-        };
-        if (config.body && typeof config.body === 'object') {
-          config.body = JSON.stringify(config.body);
-        }
-        const response = await fetch(url, config);
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({ error: 'Network error' }));
-          throw new Error(error.error || `HTTP ${response.status}`);
-        }
-        return response.json();
-      },
       auth: {
-        login: (username, password) => api.request('/auth/login', { method: 'POST', body: { username, password } }),
-        me: () => api.request('/auth/me'),
-        logout: () => api.request('/auth/logout', { method: 'POST' })
+        async login(username, password) {
+          if (!db) throw new Error('Firebase not initialized');
+          const hash = await sha256(password);
+          const snap = await db.collection('users').where('username', '==', username).where('password_hash', '==', hash).where('is_active', '==', 1).limit(1).get();
+          if (snap.empty) throw new Error('Invalid username or password');
+          const doc = snap.docs[0];
+          const user = { id: doc.id, ...doc.data() };
+          const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+          localStorage.setItem(TOKEN_KEY, JSON.stringify({ token, user: { id: user.id, username: user.username, full_name: user.full_name, name: user.full_name, email: user.email, role: user.role, department_id: user.department_id } }));
+          addActivity(user, 'login', `${user.full_name} logged in`).catch(() => {});
+          return { token, user: { id: user.id, username: user.username, full_name: user.full_name, name: user.full_name, email: user.email, role: user.role, department_id: user.department_id } };
+        },
+        async me() {
+          const raw = localStorage.getItem(TOKEN_KEY);
+          if (!raw) throw new Error('Not authenticated');
+          const session = JSON.parse(raw);
+          return session.user;
+        },
+        async logout() {
+          localStorage.removeItem(TOKEN_KEY);
+          return { success: true };
+        }
       },
       dashboard: {
-        stats: () => api.request('/dashboard/stats'),
-        byStage: () => api.request('/dashboard/by-stage'),
-        byDepartment: () => api.request('/dashboard/by-department')
+        async stats() {
+          if (!db) return { totalProjects: 0, completedProjects: 0, inProgressProjects: 0, delayedProjects: 0, averageProgress: 0, criticalTasks: 0, totalDepartments: 0 };
+          const [projSnap, deptSnap] = await Promise.all([db.collection('projects').get(), db.collection('departments').get()]);
+          const projects = projSnap.docs.map(d => d.data());
+          const total = projects.length;
+          const completed = projects.filter(p => p.stage === 'Deploy').length;
+          const inProgress = projects.filter(p => p.stage !== 'Deploy' && (p.status === 'On Track' || p.status === 'At Risk')).length;
+          const delayed = projects.filter(p => p.stage !== 'Deploy' && p.status === 'Delayed').length;
+          const avgProgress = total ? Math.round(projects.reduce((s, p) => s + (p.progress || 0), 0) / total) : 0;
+          const critical = projects.filter(p => p.priority === 'Critical' && p.stage !== 'Deploy').length;
+          return { totalProjects: total, completedProjects: completed, inProgressProjects: inProgress, delayedProjects: delayed, averageProgress: avgProgress, criticalTasks: critical, totalDepartments: deptSnap.size };
+        },
+        async byStage() {
+          if (!db) return STAGES.map(s => ({ stage: s, count: 0, avgProgress: 0 }));
+          const snap = await db.collection('projects').get();
+          const projects = snap.docs.map(d => d.data());
+          return STAGES.map(stage => {
+            const list = projects.filter(p => p.stage === stage);
+            return { stage, count: list.length, avgProgress: list.length ? Math.round(list.reduce((s, p) => s + p.progress, 0) / list.length) : 0 };
+          });
+        },
+        async byDepartment() {
+          if (!db) return [];
+          const [deptSnap, projSnap] = await Promise.all([db.collection('departments').get(), db.collection('projects').get()]);
+          const departments = deptSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const projects = projSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          return departments.map(d => {
+            const list = projects.filter(p => String(p.department_id) === String(d.id));
+            return { department_name: d.department_name, count: list.length, avgProgress: list.length ? Math.round(list.reduce((s, p) => s + (p.progress || 0), 0) / list.length) : 0 };
+          });
+        }
       },
       projects: {
-        list: (params) => {
-          const qs = new URLSearchParams(params).toString();
-          return api.request(`/projects?${qs}`);
+        async list(params = {}) {
+          if (!db) return [];
+          let query = db.collection('projects');
+          if (params.stage) query = query.where('stage', '==', params.stage);
+          if (params.status) query = query.where('status', '==', params.status);
+          if (params.priority) query = query.where('priority', '==', params.priority);
+          if (params.department_id) query = query.where('department_id', '==', parseInt(params.department_id));
+          const snap = await query.get();
+          let list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          // Enrich with department names
+          try {
+            const deptSnap = await db.collection('departments').get();
+            const deptMap = {};
+            deptSnap.docs.forEach(d => { deptMap[d.id] = d.data().department_name; });
+            list = list.map(p => ({ ...p, department_name: p.department_name || deptMap[p.department_id] || '' }));
+          } catch (e) { /* ignore enrichment errors */ }
+          if (params.search) {
+            const q = params.search.toLowerCase();
+            list = list.filter(p => p.project_name?.toLowerCase().includes(q) || p.description?.toLowerCase().includes(q));
+          }
+          return list.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
         },
-        create: (data) => api.request('/projects', { method: 'POST', body: data }),
-        update: (id, data) => api.request(`/projects/${id}`, { method: 'PUT', body: data }),
-        delete: (id) => api.request(`/projects/${id}`, { method: 'DELETE' })
+        async create(data) {
+          if (!db) throw new Error('Firebase not initialized');
+          const project = { ...data, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+          const ref = await db.collection('projects').add(project);
+          const user = JSON.parse(localStorage.getItem(TOKEN_KEY) || '{}').user;
+          addActivity(user, 'create', `Created project ${project.project_name}`, null, null, ref.id).catch(() => {});
+          return { id: ref.id, ...project };
+        },
+        async update(id, data) {
+          if (!db) throw new Error('Firebase not initialized');
+          const doc = await db.collection('projects').doc(id).get();
+          if (!doc.exists) throw new Error('Project not found');
+          const old = doc.data();
+          const updated = { ...old, ...data, updated_at: new Date().toISOString() };
+          await db.collection('projects').doc(id).update(updated);
+          const user = JSON.parse(localStorage.getItem(TOKEN_KEY) || '{}').user;
+          addActivity(user, 'update', `Updated project ${updated.project_name}`, JSON.stringify(old), JSON.stringify(updated), id).catch(() => {});
+          return { id, ...updated };
+        },
+        async delete(id) {
+          if (!db) throw new Error('Firebase not initialized');
+          const doc = await db.collection('projects').doc(id).get();
+          if (!doc.exists) throw new Error('Project not found');
+          const name = doc.data().project_name;
+          await db.collection('projects').doc(id).delete();
+          const user = JSON.parse(localStorage.getItem(TOKEN_KEY) || '{}').user;
+          addActivity(user, 'delete', `Deleted project ${name}`, null, null, id).catch(() => {});
+          return { success: true };
+        }
       },
       users: {
-        list: () => api.request('/users'),
-        create: (data) => api.request('/users', { method: 'POST', body: data }),
-        update: (id, data) => api.request(`/users/${id}`, { method: 'PUT', body: data }),
-        delete: (id) => api.request(`/users/${id}`, { method: 'DELETE' })
+        async list() {
+          if (!db) return [];
+          const snap = await db.collection('users').get();
+          return snap.docs.map(d => { const u = d.data(); return { id: d.id, username: u.username, full_name: u.full_name, email: u.email, role: u.role, department_id: u.department_id, is_active: u.is_active }; });
+        },
+        async create(data) {
+          if (!db) throw new Error('Firebase not initialized');
+          const existing = await db.collection('users').where('username', '==', data.username).limit(1).get();
+          if (!existing.empty) throw new Error('Username already exists');
+          if (!data.password || !data.password.trim()) throw new Error('Password is required');
+          const hash = await sha256(data.password);
+          const user = { ...data, password_hash: hash, is_active: 1, created_at: new Date().toISOString() };
+          delete user.password;
+          const ref = await db.collection('users').add(user);
+          return { id: ref.id, ...user };
+        },
+        async update(id, data) {
+          if (!db) throw new Error('Firebase not initialized');
+          const doc = await db.collection('users').doc(id).get();
+          if (!doc.exists) throw new Error('User not found');
+          const updates = { full_name: data.full_name, email: data.email, role: data.role, department_id: data.department_id, is_active: data.is_active };
+          if (data.password && data.password.trim()) {
+            updates.password_hash = await sha256(data.password);
+          }
+          await db.collection('users').doc(id).update(updates);
+          return { id, ...doc.data(), ...updates };
+        },
+        async delete(id) {
+          if (!db) throw new Error('Firebase not initialized');
+          await db.collection('users').doc(id).delete();
+          return { success: true };
+        }
       },
       activity: {
-        list: () => api.request('/activity')
+        async list() {
+          if (!db) return [];
+          const snap = await db.collection('activity').orderBy('created_at', 'desc').limit(50).get();
+          return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
       },
       departments: {
-        list: () => api.request('/departments')
+        async list() {
+          if (!db) return [];
+          const snap = await db.collection('departments').get();
+          return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
       },
       settings: {
         email: {
-          get: () => api.request('/settings/email'),
-          save: (data) => api.request('/settings/email', { method: 'POST', body: data })
+          async get() {
+            if (!db) return SEED_EMAIL;
+            const doc = await db.collection('email_settings').doc('default').get();
+            if (!doc.exists) return SEED_EMAIL;
+            return { id: doc.id, ...doc.data() };
+          },
+          async save(data) {
+            if (!db) throw new Error('Firebase not initialized');
+            const updated = { ...data, updated_at: new Date().toISOString() };
+            await db.collection('email_settings').doc('default').set(updated, { merge: true });
+            return { id: 'default', ...updated };
+          }
         }
       },
       notifications: {
-        test: (toEmail) => api.request('/notifications/test', { method: 'POST', body: { toEmail } }),
-        project: (projectId, recipients) => api.request('/notifications/project', { method: 'POST', body: { projectId, recipients } }),
-        overdue: (recipients) => api.request('/notifications/overdue', { method: 'POST', body: { recipients } })
+        async test(toEmail) {
+          return { success: false, message: 'Email not available in offline mode' };
+        },
+        async project(projectId, recipients) {
+          return { success: false, message: 'Email not available in offline mode' };
+        },
+        async overdue(recipients) {
+          return { success: false, message: 'Email not available in offline mode' };
+        }
+      },
+      backup: {
+        async createBackup() {
+          if (!db) throw new Error('Firebase not initialized');
+          const collections = ['users', 'departments', 'projects', 'activity', 'email_settings'];
+          const data = { _meta: { exportedAt: new Date().toISOString(), version: '1.0', app: 'Process Automation Dashboard' } };
+          for (const col of collections) {
+            const snap = await db.collection(col).get();
+            data[col] = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+          }
+          return data;
+        },
+        async restore(data) {
+          if (!db) throw new Error('Firebase not initialized');
+          const batch = db.batch();
+          const collections = ['users', 'departments', 'projects', 'activity'];
+          for (const col of collections) {
+            if (Array.isArray(data[col])) {
+              for (const doc of data[col]) {
+                const id = doc._id;
+                const copy = { ...doc };
+                delete copy._id;
+                if (id) {
+                  batch.set(db.collection(col).doc(id), copy, { merge: true });
+                } else {
+                  batch.set(db.collection(col).doc(), copy);
+                }
+              }
+            }
+          }
+          if (Array.isArray(data.email_settings) && data.email_settings.length > 0) {
+            const es = data.email_settings[0];
+            const id = es._id || 'default';
+            const copy = { ...es };
+            delete copy._id;
+            batch.set(db.collection('email_settings').doc(id), copy, { merge: true });
+          }
+          await batch.commit();
+          return { success: true };
+        }
       }
     };
+
+    // Seed on first load
+    seedFirestoreIfEmpty().then(() => { firestoreReady = true; }).catch(e => console.error('[Firebase] Seed error:', e));
+
+    // Restore auth token on load
+    try {
+      const session = JSON.parse(localStorage.getItem(TOKEN_KEY) || '{}');
+      if (session.token) window.__authToken = session.token;
+    } catch (e) {}
 
     const ICONS = {
       Dashboard: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>,
@@ -171,6 +426,7 @@
       Eye: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>,
       EyeOff: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>,
       Refresh: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>,
+      Database: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>,
       Sparkles: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>,
       Send: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>,
       Mail: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>,
@@ -426,11 +682,11 @@
             due_date: normalizeDate(project.due_date)
           };
         }
-        const defaultDept = departments.find(d => d.department_name === currentUser?.department_name || d.id === currentUser?.department_id);
         return {
-          department_id: defaultDept?.id || departments[0]?.id || 1,
+          department_id: '',
           project_name: '',
           owner_name: isAdmin ? '' : (currentUser?.name || currentUser?.full_name || ''),
+          owner_id: isAdmin ? '' : currentUser?.id,
           stage: 'Discovery',
           progress: 0,
           start_date: new Date().toLocaleDateString('en-CA'),
@@ -451,7 +707,7 @@
 
       const handleSubmit = (e) => {
         e.preventDefault();
-        if (!form.project_name?.trim() || !form.owner_name?.trim()) return;
+        if (!form.project_name?.trim() || !form.owner_name?.trim() || !form.department_id) return;
         onSave(form);
       };
 
@@ -463,8 +719,9 @@
               <input type="text" required value={form.project_name || ''} onChange={e => handleChange('project_name', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm" placeholder="Enter project name" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Department / Team</label>
-              <select value={form.department_id || departments[0]?.id || 1} onChange={e => handleChange('department_id', parseInt(e.target.value))} disabled={!isAdmin} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm bg-white disabled:bg-slate-50 disabled:text-slate-500">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Department / Team *</label>
+              <select required value={form.department_id || ''} onChange={e => handleChange('department_id', parseInt(e.target.value))} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm bg-white">
+                <option value="">Select Department</option>
                 {departments.map(d => <option key={d.id} value={d.id}>{d.department_name}</option>)}
               </select>
             </div>
@@ -677,7 +934,7 @@
 
       useEffect(() => { loadStats(); }, [loadStats]);
 
-      const kpis = stats || { total: projects.length, deployed: 0, atRisk: 0, avgProgress: 0 };
+      const kpis = stats || { totalProjects: projects.length, completedProjects: 0, delayedProjects: 0, averageProgress: 0, totalDepartments: 0 };
 
       const stageData = useMemo(() => STAGES.map(s => ({
         label: s.slice(0, 3),
@@ -708,7 +965,7 @@
                 <span className="text-sm text-slate-500 font-medium">Total Projects</span>
                 <div className="w-9 h-9 rounded-lg bg-primary-50 flex items-center justify-center"><ICONS.FileText className="w-5 h-5 text-primary-600" /></div>
               </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.total}</div>
+              <div className="text-3xl font-bold text-slate-800">{kpis.totalProjects}</div>
               <div className="mt-2 text-xs text-slate-400">Across {kpis.totalDepartments || 0} departments</div>
             </div>
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
@@ -716,17 +973,17 @@
                 <span className="text-sm text-slate-500 font-medium">Deployed</span>
                 <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center"><ICONS.Check className="w-5 h-5 text-emerald-600" /></div>
               </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.deployed}</div>
-              <div className="mt-2 text-xs text-emerald-600 font-medium">{kpis.total > 0 ? Math.round((kpis.deployed / kpis.total) * 100) : 0}% completion rate</div>
+              <div className="text-3xl font-bold text-slate-800">{kpis.completedProjects}</div>
+              <div className="mt-2 text-xs text-emerald-600 font-medium">{kpis.totalProjects > 0 ? Math.round((kpis.completedProjects / kpis.totalProjects) * 100) : 0}% completion rate</div>
             </div>
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-slate-500 font-medium">Avg Progress</span>
                 <div className="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center"><ICONS.TrendUp className="w-5 h-5 text-teal-600" /></div>
               </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.avgProgress || 0}%</div>
+              <div className="text-3xl font-bold text-slate-800">{kpis.averageProgress || 0}%</div>
               <div className="mt-2 w-full bg-slate-100 rounded-full h-1.5">
-                <div className={`h-1.5 rounded-full transition-all ${getProgressColor(kpis.avgProgress || 0)}`} style={{ width: `${kpis.avgProgress || 0}%` }}></div>
+                <div className={`h-1.5 rounded-full transition-all ${getProgressColor(kpis.averageProgress || 0)}`} style={{ width: `${kpis.averageProgress || 0}%` }}></div>
               </div>
             </div>
             <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
@@ -734,7 +991,7 @@
                 <span className="text-sm text-slate-500 font-medium">At Risk / Delayed</span>
                 <div className="w-9 h-9 rounded-lg bg-rose-50 flex items-center justify-center"><ICONS.Alert className="w-5 h-5 text-rose-600" /></div>
               </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.atRisk}</div>
+              <div className="text-3xl font-bold text-slate-800">{kpis.delayedProjects}</div>
               <div className="mt-2 text-xs text-rose-500 font-medium">Need attention</div>
             </div>
           </div>
@@ -815,11 +1072,18 @@
       );
     }
 
-    function ProjectsView({ isAdmin, currentUser, onEdit, onDelete, onAdd, departments }) {
+    function ProjectsView({ isAdmin, currentUser, onEdit, onDelete, onAdd, departments, refreshKey }) {
       const [projects, setProjects] = useState([]);
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
       const [search, setSearch] = useState('');
+      const [debouncedSearch, setDebouncedSearch] = useState('');
+
+      // Debounce search input (300ms delay)
+      useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(search), 300);
+        return () => clearTimeout(timer);
+      }, [search]);
       const [filterDept, setFilterDept] = useState('All');
       const [filterStage, setFilterStage] = useState('All');
       const [filterPriority, setFilterPriority] = useState('All');
@@ -828,27 +1092,70 @@
       const [notifyRecipients, setNotifyRecipients] = useState('');
       const [notifySending, setNotifySending] = useState(false);
       const [notifyResult, setNotifyResult] = useState(null);
+      const [exporting, setExporting] = useState(false);
 
       const loadProjects = useCallback(async () => {
         try {
           setLoading(true);
           const params = {};
-          if (search) params.search = search;
-          if (filterDept !== 'All') params.department = filterDept;
+          if (debouncedSearch) params.search = debouncedSearch;
+          if (filterDept !== 'All') {
+            const dept = departments.find(d => d.department_name === filterDept);
+            if (dept) params.department_id = dept.id;
+          }
           if (filterStage !== 'All') params.stage = filterStage;
           if (filterPriority !== 'All') params.priority = filterPriority;
           if (filterStatus !== 'All') params.status = filterStatus;
           const data = await api.projects.list(params);
-          setProjects(data);
+          // Non-admin users only see their own projects
+          const filtered = (!isAdmin && currentUser) ? data.filter(p => String(p.owner_id) === String(currentUser.id) || String(p.created_by) === String(currentUser.id)) : data;
+          setProjects(filtered);
           setError(null);
         } catch (err) {
           setError(err.message);
         } finally {
           setLoading(false);
         }
-      }, [search, filterDept, filterStage, filterPriority, filterStatus]);
+      }, [debouncedSearch, filterDept, filterStage, filterPriority, filterStatus, departments, isAdmin, currentUser]);
 
-      useEffect(() => { loadProjects(); }, [loadProjects]);
+      const handleExport = async () => {
+        try {
+          setExporting(true);
+          const allProjects = await api.projects.list({});
+          const csvHeaders = ['Project Name','Department','Owner','Stage','Progress (%)','Start Date','Due Date','Priority','Status','Description'];
+          const csvRows = allProjects.map(p => {
+            const deptName = departments.find(d => String(d.id) === String(p.department_id))?.department_name || p.department_name || p.department || '';
+            return [
+              `"${(p.project_name || '').replace(/"/g, '""')}"`,
+              `"${deptName.replace(/"/g, '""')}"`,
+              `"${(p.owner_name || '').replace(/"/g, '""')}"`,
+              p.stage || '',
+              p.progress || 0,
+              p.start_date || '',
+              p.due_date || '',
+              p.priority || '',
+              p.status || '',
+              `"${(p.description || '').replace(/"/g, '""')}"`
+            ].join(',');
+          });
+          const csv = [csvHeaders.join(','), ...csvRows].join('\n');
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `projects-report-${new Date().toISOString().slice(0,10)}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error('Export error:', err);
+        } finally {
+          setExporting(false);
+        }
+      };
+
+      useEffect(() => { loadProjects(); }, [loadProjects, refreshKey]);
 
       if (loading && projects.length === 0) return <LoadingSpinner message="Loading projects..." />;
       if (error && projects.length === 0) return <ErrorMessage error={error} onRetry={loadProjects} />;
@@ -864,7 +1171,7 @@
               {isAdmin && (
                 <select value={filterDept} onChange={e => setFilterDept(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500">
                   <option value="All">All Departments</option>
-                  {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                  {departments.map(d => <option key={d.id} value={d.department_name}>{d.department_name}</option>)}
                 </select>
               )}
               <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500">
@@ -880,6 +1187,11 @@
                 {['On Track', 'At Risk', 'Delayed', 'Completed'].map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+            {isAdmin && (
+              <button onClick={handleExport} disabled={exporting} className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-400 text-white rounded-lg text-sm font-medium transition shadow-sm">
+                <ICONS.FileText className="w-4 h-4" /> {exporting ? 'Exporting...' : 'Export Report'}
+              </button>
+            )}
             <button onClick={onAdd} className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm">
               <ICONS.Plus className="w-4 h-4" /> New Project
             </button>
@@ -916,7 +1228,7 @@
                           <div className="text-xs text-slate-400 truncate max-w-[160px]">{p.description || 'No description'}</div>
                         </td>
                         <td className="p-3">
-                          <span className="text-xs text-slate-500">{p.department_name || p.department}</span>
+                          <span className="text-xs text-slate-500">{departments.find(d => String(d.id) === String(p.department_id))?.department_name || p.department_name || p.department || '-'}</span>
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2">
@@ -1009,7 +1321,7 @@
       );
     }
 
-    function UsersView({ onEditUser, onDeleteUser, onAddUser, departments }) {
+    function UsersView({ onEditUser, onDeleteUser, onAddUser, departments, refreshKey }) {
       const [users, setUsers] = useState([]);
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState(null);
@@ -1028,7 +1340,7 @@
         }
       }, []);
 
-      useEffect(() => { loadUsers(); }, [loadUsers]);
+      useEffect(() => { loadUsers(); }, [loadUsers, refreshKey]);
 
       const filtered = useMemo(() => {
         if (!search) return users;
@@ -1098,6 +1410,7 @@
     function ReportsView({ projects }) {
       const [deptData, setDeptData] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [showAllTimeline, setShowAllTimeline] = useState(false);
 
       const loadData = useCallback(async () => {
         try {
@@ -1118,6 +1431,29 @@
         projects.forEach(p => { map[p.status] = (map[p.status] || 0) + 1; });
         return Object.entries(map).map(([name, count]) => ({ name, count }));
       }, [projects]);
+
+      const parseDate = (str) => {
+        if (!str) return null;
+        const match = String(str).match(/^(\d{4}-\d{2}-\d{2})/);
+        const d = match ? new Date(match[1] + 'T00:00:00') : new Date(str);
+        return isNaN(d.getTime()) ? null : d;
+      };
+      const today = new Date();
+      const timelineProjects = useMemo(() => {
+        return [...projects]
+          .map(p => ({ ...p, _start: parseDate(p.start_date), _due: parseDate(p.due_date) }))
+          .sort((a, b) => (a._due ? a._due.getTime() : Infinity) - (b._due ? b._due.getTime() : Infinity))
+          .map(p => {
+            let elapsedPct = 0;
+            if (p._start && p._due) {
+              const total = p._due - p._start;
+              const elapsed = today - p._start;
+              elapsedPct = total > 0 ? Math.max(0, Math.min(100, (elapsed / total) * 100)) : 0;
+            }
+            return { ...p, elapsedPct };
+          });
+      }, [projects]);
+      const visibleTimeline = showAllTimeline ? timelineProjects : timelineProjects.slice(0, 5);
 
       if (loading) return <LoadingSpinner message="Loading reports..." />;
 
@@ -1158,12 +1494,65 @@
                 ))}
               </div>
             </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 md:col-span-2">
+              <h3 className="text-sm font-semibold text-slate-700 mb-4">Project Timeline</h3>
+              <div className="space-y-5">
+                {visibleTimeline.length === 0 && <p className="text-sm text-slate-500">No projects to display.</p>}
+                {visibleTimeline.map(p => {
+                  const days = daysUntil(p.due_date);
+                  const isOverdue = days !== null && days < 0;
+                  const isSoon = days !== null && days >= 0 && days <= 7;
+                  const daysLabel = days === null ? 'No due date' : isOverdue ? `${Math.abs(days)} days overdue` : days === 0 ? 'Due today' : `${days} days left`;
+                  const daysClass = days === null ? 'bg-slate-100 text-slate-600' : isOverdue ? 'bg-rose-100 text-rose-700' : isSoon ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
+                  return (
+                    <div key={p.id} className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`w-2 h-2 rounded-full ${getStageColor(p.stage)}`}></span>
+                          <span className="text-sm font-medium text-slate-800 truncate">{p.project_name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs text-slate-500">{formatDate(p.due_date)}</span>
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${daysClass}`}>{daysLabel}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="w-full bg-slate-100 rounded-full h-2">
+                          <div className={`h-2 rounded-full ${isOverdue ? 'bg-rose-500' : 'bg-blue-500'}`} style={{ width: `${p.elapsedPct}%` }}></div>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                          <span>{formatDate(p.start_date)}</span>
+                          <span>{formatDate(p.due_date)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {timelineProjects.length > 5 && (
+                  <button
+                    onClick={() => setShowAllTimeline(!showAllTimeline)}
+                    className="w-full mt-2 py-2 text-sm font-medium text-primary-600 hover:text-primary-700 hover:bg-primary-50 rounded-lg transition"
+                  >
+                    {showAllTimeline ? 'Show Less' : `See More (${timelineProjects.length - 5} more)`}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       );
     }
 
-    function SettingsView({ currentUser, isAdmin }) {
+    function SettingsView({ currentUser, isAdmin, onUserUpdate }) {
+      const [profileForm, setProfileForm] = useState({
+        full_name: currentUser?.full_name || currentUser?.name || '',
+        email: currentUser?.email || '',
+        password: '',
+        confirmPassword: ''
+      });
+      const [profileSaving, setProfileSaving] = useState(false);
+      const [profileResult, setProfileResult] = useState(null);
       const [emailSettings, setEmailSettings] = useState(null);
       const [emailLoading, setEmailLoading] = useState(false);
       const [emailSaving, setEmailSaving] = useState(false);
@@ -1173,6 +1562,9 @@
       const [overdueRecipients, setOverdueRecipients] = useState('');
       const [overdueSending, setOverdueSending] = useState(false);
       const [overdueResult, setOverdueResult] = useState(null);
+      const [backupLoading, setBackupLoading] = useState(false);
+      const [restoreLoading, setRestoreLoading] = useState(false);
+      const [backupResult, setBackupResult] = useState(null);
 
       useEffect(() => {
         if (isAdmin) loadEmailSettings();
@@ -1237,18 +1629,125 @@
         setEmailSettings(prev => ({ ...prev, [field]: value }));
       };
 
+      const handleExportBackup = async () => {
+        try {
+          setBackupLoading(true);
+          const data = await api.backup.createBackup();
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `pad-backup-${new Date().toISOString().slice(0, 10)}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setBackupResult({ type: 'success', message: 'Backup downloaded successfully' });
+          setTimeout(() => setBackupResult(null), 5000);
+        } catch (err) {
+          setBackupResult({ type: 'error', message: err.message || 'Backup failed' });
+        } finally {
+          setBackupLoading(false);
+        }
+      };
+
+      const handleRestoreBackup = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          setRestoreLoading(true);
+          const text = await file.text();
+          const data = JSON.parse(text);
+          if (!data._meta) throw new Error('Invalid backup file');
+          await api.backup.restore(data);
+          setBackupResult({ type: 'success', message: 'Database restored successfully. Please refresh the page.' });
+          setTimeout(() => setBackupResult(null), 5000);
+        } catch (err) {
+          setBackupResult({ type: 'error', message: err.message || 'Restore failed' });
+        } finally {
+          setRestoreLoading(false);
+          e.target.value = '';
+        }
+      };
+
+      const handleSaveProfile = async () => {
+        if (profileForm.password && profileForm.password !== profileForm.confirmPassword) {
+          setProfileResult({ type: 'error', message: 'Passwords do not match' });
+          setTimeout(() => setProfileResult(null), 3000);
+          return;
+        }
+        try {
+          setProfileSaving(true);
+          const updateData = {
+            full_name: profileForm.full_name,
+            email: profileForm.email,
+            role: currentUser.role,
+            department_id: currentUser.department_id,
+            is_active: 1
+          };
+          if (profileForm.password && profileForm.password.trim()) {
+            updateData.password = profileForm.password;
+          }
+          const updated = await api.users.update(currentUser.id, updateData);
+          // Update local session
+          const updatedUser = { ...currentUser, name: profileForm.full_name, full_name: profileForm.full_name, email: profileForm.email };
+          if (onUserUpdate) onUserUpdate(updatedUser);
+          // Update localStorage session
+          try {
+            const session = JSON.parse(localStorage.getItem(TOKEN_KEY) || '{}');
+            if (session.user) {
+              session.user = { ...session.user, ...updatedUser };
+              localStorage.setItem(TOKEN_KEY, JSON.stringify(session));
+            }
+          } catch (e) { /* ignore */ }
+          setProfileForm(prev => ({ ...prev, password: '', confirmPassword: '' }));
+          setProfileResult({ type: 'success', message: 'Profile updated successfully' });
+          setTimeout(() => setProfileResult(null), 3000);
+        } catch (err) {
+          setProfileResult({ type: 'error', message: err.message });
+          setTimeout(() => setProfileResult(null), 3000);
+        } finally {
+          setProfileSaving(false);
+        }
+      };
+
       return (
         <div className="max-w-2xl space-y-6">
           <h2 className="text-xl font-bold text-slate-800">Settings</h2>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-6">
             <div>
-              <h3 className="text-sm font-semibold text-slate-700 mb-3">Account Information</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Name</p><p className="text-sm font-medium text-slate-700">{currentUser.name}</p></div>
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Role</p><p className="text-sm font-medium text-slate-700 capitalize">{currentUser.role}</p></div>
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Department</p><p className="text-sm font-medium text-slate-700">{currentUser.department_name || currentUser.department}</p></div>
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Username</p><p className="text-sm font-medium text-slate-700 font-mono">{currentUser.username}</p></div>
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">Profile Settings</h3>
+              {profileResult && (
+                <div className={`mb-4 p-3 rounded-lg text-sm ${profileResult.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>{profileResult.message}</div>
+              )}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                  <input type="text" value={profileForm.full_name} onChange={e => setProfileForm(p => ({ ...p, full_name: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                  <input type="email" value={profileForm.email} onChange={e => setProfileForm(p => ({ ...p, email: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Role</p><p className="text-sm font-medium text-slate-700 capitalize">{currentUser.role}</p></div>
+                  <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Username</p><p className="text-sm font-medium text-slate-700 font-mono">{currentUser.username}</p></div>
+                </div>
+                <div className="border-t border-slate-100 pt-4">
+                  <p className="text-xs text-slate-500 mb-3">Change Password (leave blank to keep current)</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
+                      <input type="password" value={profileForm.password} onChange={e => setProfileForm(p => ({ ...p, password: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm" placeholder="Enter new password" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+                      <input type="password" value={profileForm.confirmPassword} onChange={e => setProfileForm(p => ({ ...p, confirmPassword: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm" placeholder="Confirm new password" />
+                    </div>
+                  </div>
+                </div>
+                <button onClick={handleSaveProfile} disabled={profileSaving} className="px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 disabled:opacity-50 transition">{profileSaving ? 'Saving...' : 'Save Changes'}</button>
               </div>
             </div>
           </div>
@@ -1354,6 +1853,36 @@
               ) : (
                 <p className="text-sm text-slate-400">Failed to load email settings.</p>
               )}
+            </div>
+          )}
+
+          {isAdmin && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-6">
+              <div className="flex items-center gap-2">
+                <ICONS.Database className="w-5 h-5 text-primary-600" />
+                <h3 className="text-sm font-semibold text-slate-700">Database Backup & Restore</h3>
+              </div>
+
+              {backupResult && (
+                <div className={`p-3 rounded-lg text-sm ${backupResult.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                  {backupResult.message}
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button onClick={handleExportBackup} disabled={backupLoading} className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-slate-400 text-white rounded-lg text-sm font-medium transition shadow-sm flex items-center justify-center gap-2">
+                    <ICONS.FileText className="w-4 h-4" /> {backupLoading ? 'Exporting...' : 'Export Backup'}
+                  </button>
+                  <label className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm font-medium transition shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:bg-slate-400">
+                    <ICONS.Refresh className="w-4 h-4" /> {restoreLoading ? 'Restoring...' : 'Import Backup'}
+                    <input type="file" accept=".json" onChange={handleRestoreBackup} disabled={restoreLoading} className="hidden" />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Export creates a JSON backup of all collections (users, departments, projects, activity, email settings). Import restores data from a previously exported backup file. Existing data will be merged.
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -1598,9 +2127,20 @@
       const [editingItem, setEditingItem] = useState(null);
       const [deleteConfirm, setDeleteConfirm] = useState(null);
       const [deleteType, setDeleteType] = useState(null);
+      const [confirmAction, setConfirmAction] = useState(null);
       const [aiPanelOpen, setAiPanelOpen] = useState(false);
-      const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem('pad_api_url') || '');
-      const [showBackendConfig, setShowBackendConfig] = useState(false);
+      const [refreshKey, setRefreshKey] = useState(0);
+
+      // Restore session on page load
+      useEffect(() => {
+        try {
+          const session = JSON.parse(localStorage.getItem(TOKEN_KEY) || '{}');
+          if (session.token && session.user) {
+            setCurrentUser(session.user);
+            setIsLoggedIn(true);
+          }
+        } catch (e) { /* ignore parse errors */ }
+      }, []);
 
       // Load initial data
       useEffect(() => {
@@ -1614,7 +2154,9 @@
       const loadProjects = async () => {
         try {
           const data = await api.projects.list({});
-          setProjects(data);
+          const isAdmin = currentUser?.role === 'admin';
+          const filtered = (!isAdmin && currentUser) ? data.filter(p => String(p.owner_id) === String(currentUser.id) || String(p.created_by) === String(currentUser.id)) : data;
+          setProjects(filtered);
         } catch (err) { console.error('Load projects error:', err); }
       };
 
@@ -1647,11 +2189,17 @@
         }
       };
 
-      const handleLogout = async () => {
+      const performLogout = async () => {
         try { await api.auth.logout(); } catch (e) {}
         window.__authToken = null;
+        localStorage.removeItem(TOKEN_KEY);
         setCurrentUser(null);
         setIsLoggedIn(false);
+        setConfirmAction(null);
+      };
+
+      const handleLogout = () => {
+        setConfirmAction({ title: 'Sign Out', message: 'Are you sure you want to sign out?', onConfirm: performLogout, confirmLabel: 'Sign Out', danger: false });
       };
 
       const openModal = (type, item = null) => {
@@ -1667,35 +2215,80 @@
       };
 
       const handleSaveProject = async (project) => {
-        if (project.id) {
-          await api.projects.update(project.id, project);
-        } else {
-          await api.projects.create(project);
+        try {
+          const isAdmin = currentUser?.role === 'admin';
+          // Non-admin users can only create/edit their own projects
+          if (!isAdmin) {
+            project.owner_id = currentUser.id;
+            project.owner_name = currentUser.name || currentUser.full_name;
+            project.created_by = parseInt(currentUser.id);
+          }
+          if (project.id) {
+            await api.projects.update(project.id, project);
+          } else {
+            await api.projects.create(project);
+          }
+          await loadProjects();
+          await loadActivity();
+          setRefreshKey(k => k + 1);
+          closeModal();
+        } catch (err) {
+          console.error('Save project error:', err);
+          alert('Failed to save project: ' + (err.message || 'Unknown error'));
         }
-        await loadProjects();
-        await loadActivity();
-        closeModal();
       };
 
       const handleDeleteProject = async (id) => {
-        await api.projects.delete(id);
-        await loadProjects();
-        await loadActivity();
-        setDeleteConfirm(null);
+        try {
+          await api.projects.delete(id);
+          await loadProjects();
+          await loadActivity();
+          setRefreshKey(k => k + 1);
+          setDeleteConfirm(null);
+        } catch (err) {
+          console.error('Delete project error:', err);
+          alert('Failed to delete project: ' + (err.message || 'Unknown error'));
+        }
       };
 
       const handleSaveUser = async (user) => {
-        if (user.id) {
-          await api.users.update(user.id, user);
-        } else {
-          await api.users.create(user);
+        try {
+          if (user.id) {
+            await api.users.update(user.id, user);
+          } else {
+            await api.users.create(user);
+          }
+          // If editing the currently logged-in user, update session state
+          if (currentUser && user.id === currentUser.id) {
+            const updatedName = user.full_name || user.name || currentUser.name;
+            const updated = { ...currentUser, name: updatedName, full_name: updatedName, email: user.email || currentUser.email, role: user.role || currentUser.role, department_id: user.department_id || currentUser.department_id };
+            setCurrentUser(updated);
+            // Persist to localStorage
+            try {
+              const session = JSON.parse(localStorage.getItem('pad_firebase_token') || '{}');
+              if (session.user) {
+                session.user = { ...session.user, ...updated };
+                localStorage.setItem('pad_firebase_token', JSON.stringify(session));
+              }
+            } catch (e) { /* ignore storage errors */ }
+          }
+          setRefreshKey(k => k + 1);
+          closeModal();
+        } catch (err) {
+          console.error('Save user error:', err);
+          alert('Failed to save user: ' + (err.message || 'Unknown error'));
         }
-        closeModal();
       };
 
       const handleDeleteUser = async (id) => {
-        await api.users.delete(id);
-        setDeleteConfirm(null);
+        try {
+          await api.users.delete(id);
+          setRefreshKey(k => k + 1);
+          setDeleteConfirm(null);
+        } catch (err) {
+          console.error('Delete user error:', err);
+          alert('Failed to delete user: ' + (err.message || 'Unknown error'));
+        }
       };
 
       const isAdmin = currentUser?.role === 'admin';
@@ -1763,35 +2356,6 @@
                     Demo passwords are configured via SEED_ADMIN_PASSWORD and SEED_DEFAULT_PASSWORD environment variables.
                   </p>
                 </div>
-                <div className="mt-4">
-                  <button onClick={() => setShowBackendConfig(!showBackendConfig)} className="text-xs text-slate-400 hover:text-primary-600 flex items-center gap-1 mx-auto transition">
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                    {showBackendConfig ? 'Hide' : 'Backend URL'}
-                  </button>
-                  {showBackendConfig && (
-                    <div className="mt-2 p-3 bg-slate-50 rounded-lg border border-slate-100 animate-fade-in">
-                      <p className="text-[10px] text-slate-400 mb-1.5">Set your backend API URL (e.g., NAS or cloud server)</p>
-                      <input
-                        type="text"
-                        value={backendUrl}
-                        onChange={e => setBackendUrl(e.target.value)}
-                        placeholder="https://your-api-server/api"
-                        className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
-                      />
-                      <div className="flex gap-2 mt-2">
-                        <button
-                          onClick={() => { if (backendUrl) { localStorage.setItem('pad_api_url', backendUrl); window.location.reload(); } }}
-                          className="flex-1 py-1 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-[10px] font-medium transition"
-                        >Save & Reload</button>
-                        <button
-                          onClick={() => { localStorage.removeItem('pad_api_url'); setBackendUrl(''); window.location.reload(); }}
-                          className="flex-1 py-1 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-lg text-[10px] font-medium transition"
-                        >Reset</button>
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1.5">Current: <span className="font-mono text-slate-500">{API_BASE}</span></p>
-                    </div>
-                  )}
-                </div>
               </div>
             </div>
           </div>
@@ -1810,8 +2374,9 @@
                   currentUser={currentUser}
                   onEdit={p => openModal('project', p)}
                   onDelete={id => { setDeleteConfirm(id); setDeleteType('project'); }}
-                  onAdd={() => openModal('project')}
+                  onAdd={() => setConfirmAction({ title: 'New Project', message: 'Are you sure you want to create a new project?', onConfirm: () => { openModal('project'); setConfirmAction(null); }, confirmLabel: 'Create Project', danger: false })}
                   departments={departments}
+                  refreshKey={refreshKey}
                 />
               )}
               {activeTab === 'users' && isAdmin && (
@@ -1820,10 +2385,11 @@
                   onDeleteUser={id => { setDeleteConfirm(id); setDeleteType('user'); }}
                   onAddUser={() => openModal('user')}
                   departments={departments}
+                  refreshKey={refreshKey}
                 />
               )}
               {activeTab === 'reports' && <ReportsView projects={projects} />}
-              {activeTab === 'settings' && <SettingsView currentUser={currentUser} isAdmin={isAdmin} />}
+              {activeTab === 'settings' && <SettingsView currentUser={currentUser} isAdmin={isAdmin} onUserUpdate={(updated) => { setCurrentUser(updated); }} />}
             </div>
           </main>
 
@@ -1846,6 +2412,16 @@
               <div className="flex justify-end gap-3">
                 <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition">Cancel</button>
                 <button onClick={() => deleteType === 'project' ? handleDeleteProject(deleteConfirm) : handleDeleteUser(deleteConfirm)} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium transition shadow-sm">Delete {deleteType === 'project' ? 'Project' : 'User'}</button>
+              </div>
+            </div>
+          </Modal>
+
+          <Modal isOpen={!!confirmAction} onClose={() => setConfirmAction(null)} title={confirmAction?.title || 'Confirm'}>
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">{confirmAction?.message}</p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setConfirmAction(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+                <button onClick={() => confirmAction?.onConfirm()} className={`px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm ${confirmAction?.danger ? 'bg-rose-600 hover:bg-rose-700 text-white' : 'bg-primary-600 hover:bg-primary-700 text-white'}`}>{confirmAction?.confirmLabel || 'Confirm'}</button>
               </div>
             </div>
           </Modal>

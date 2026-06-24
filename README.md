@@ -23,7 +23,7 @@ GitHub Pages only hosts static files. The Node.js backend must run separately on
 When you open the dashboard on GitHub Pages, click **"Backend URL"** on the login screen and enter your backend API address, for example:
 
 ```
-http://171.17.50.95:3001/api
+https://your-api-server/api
 ```
 
 Then click **Save & Reload**. The setting is stored in your browser and persists across visits.
@@ -31,15 +31,17 @@ Then click **Save & Reload**. The setting is stored in your browser and persists
 You can also set it via URL parameter (one-time):
 
 ```
-https://yourusername.github.io/your-repo?api=http://171.17.50.95:3001/api
+https://yourusername.github.io/your-repo?api=https://your-api-server/api
 ```
 
 ### Demo Accounts
 
-| Role     | Username | Password  |
-|----------|----------|-----------|
-| Admin    | admin    | admin123  |
-| User     | harold   | harold123 |
+Demo passwords are configured through environment variables (`SEED_ADMIN_PASSWORD`, `SEED_DEFAULT_PASSWORD`) and rendered into the seed SQL by `scripts/render-seed-sql.js`.
+
+| Role     | Username |
+|----------|----------|
+| Admin    | admin    |
+| User     | harold   |
 
 ### Features
 

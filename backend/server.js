@@ -6,6 +6,8 @@
  * Cloud: Uses pg (node-postgres) via DATABASE_URL (Render, Supabase, etc.)
  */
 
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');

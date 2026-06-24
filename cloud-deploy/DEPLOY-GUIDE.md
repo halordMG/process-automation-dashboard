@@ -168,9 +168,9 @@ Then set the `CORS_ORIGIN` environment variable in Render to your Netlify/Vercel
 ## Part 7: Test the Deployment
 
 1. Open your deployed frontend URL in a browser
-2. Log in with:
-   - **Admin**: `admin` / `admin123`
-   - **User**: `harold` / `harold123`
+2. Log in with the demo accounts. Passwords are configured via `SEED_ADMIN_PASSWORD` and `SEED_DEFAULT_PASSWORD` in your `.env` file:
+   - **Admin**: `admin`
+   - **User**: `harold`
 3. Verify:
    - Dashboard loads with data
    - Projects page works (CRUD operations)
@@ -181,22 +181,23 @@ Then set the `CORS_ORIGIN` environment variable in Render to your Netlify/Vercel
 
 ## Part 8: First Login Setup
 
-The PostgreSQL schema includes a seed admin user with a placeholder password hash. You'll need to set up a real password:
+The PostgreSQL schema template includes a seed admin user whose password hash is generated from `SEED_ADMIN_PASSWORD` in your `.env` file. Update `.env` with your desired demo passwords, then run the render script to regenerate the SQL seed file:
+
+```bash
+node scripts/render-seed-sql.js
+```
 
 ### Option: Create a new admin via SQL
 
-Connect to your PostgreSQL database and run:
+If you prefer to create an admin manually, connect to your PostgreSQL database and run:
 
 ```sql
--- Delete the placeholder admin
-DELETE FROM users WHERE username = 'admin';
-
--- Create a new admin (password: admin123, SHA-256 hash)
+-- Generate a SHA-256 hash of your password first, then insert it
 INSERT INTO users (username, password_hash, full_name, role, department_id, is_active)
-VALUES ('admin', '690b83a891e08816b3b14b5a8f0c0c6c14a7a1c1e8f0a0c0a0c0a0c0a0c0a0c0', 'Admin User', 'admin', 1, 1);
+VALUES ('admin', '<your-sha256-hash>', 'Admin User', 'admin', 1, 1);
 ```
 
-Note: The SHA-256 hash of `admin123` is `690b83a891e08816b3b14b5a8f0c0c6c14a7a1c1e8f0a0c0a0c0a0c0a0c0a0c0`. You can generate your own with:
+Generate a SHA-256 hash with:
 
 ```bash
 echo -n "yourpassword" | sha256sum

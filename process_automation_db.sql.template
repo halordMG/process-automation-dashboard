@@ -5,6 +5,11 @@
 -- Description: Full schema for projects, users, departments,
 --              stages, activity logs with role-based access.
 -- ============================================================
+--
+-- NOTE: This is a TEMPLATE. Run scripts/render-seed-sql.js to
+-- generate the actual process_automation_db.sql file with
+-- password values substituted from your .env file.
+--
 
 -- Drop database if exists (for clean setup)
 -- DROP DATABASE IF EXISTS process_automation_db;
@@ -333,25 +338,22 @@ INSERT INTO departments (department_name, description) VALUES
 ('MOKI (MKI Team)', 'Marketing and Knowledge Integration team'),
 ('Brandify (Trade Marketing)', 'Trade Marketing team');
 
--- Users (password_hash values are SHA256 hashes of the demo passwords)
--- admin123 = 240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9
--- harold123 = 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8 (placeholder)
--- niel123 = 5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8 (placeholder)
--- In production, use bcrypt/argon2 hashing
+-- Users (password_hash values are SHA256 hashes of the configured seed passwords)
+-- In production, use bcrypt/argon2 hashing and rotate all seeded credentials.
 INSERT INTO users (username, password_hash, full_name, email, role, department_id, is_active) VALUES
-('admin', SHA2('admin123', 256), 'System Administrator', 'admin@company.com', 'admin', 1, 1),
-('harold', SHA2('harold123', 256), 'Harold Bumanlag', 'harold@company.com', 'user', 1, 1),
-('niel', SHA2('niel123', 256), 'Niel', 'niel@company.com', 'user', 1, 1),
-('ivan', SHA2('ivan123', 256), 'Ivan', 'ivan@company.com', 'user', 1, 1),
-('jireh', SHA2('jireh123', 256), 'Jireh', 'jireh@company.com', 'user', 1, 1),
-('kong', SHA2('kong123', 256), 'Kong', 'kong@company.com', 'user', 2, 1),
-('julie', SHA2('julie123', 256), 'Julie', 'julie@company.com', 'user', 3, 1),
-('rodavallo', SHA2('rodavallo123', 256), 'Rodavallo', 'rodavallo@company.com', 'user', 4, 1),
-('raquel', SHA2('raquel123', 256), 'Raquel', 'raquel@company.com', 'user', 5, 1),
-('leony', SHA2('leony123', 256), 'Leony', 'leony@company.com', 'user', 6, 1),
-('jake', SHA2('jake123', 256), 'Jake', 'jake@company.com', 'user', 7, 1),
-('jennybel', SHA2('jennybel123', 256), 'Jennybel', 'jennybel@company.com', 'user', 8, 1),
-('geille', SHA2('geille123', 256), 'Geille', 'geille@company.com', 'user', 9, 1);
+('admin', SHA2('${SEED_ADMIN_PASSWORD}', 256), 'System Administrator', 'admin@company.com', 'admin', 1, 1),
+('harold', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Harold Bumanlag', 'harold@company.com', 'user', 1, 1),
+('niel', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Niel', 'niel@company.com', 'user', 1, 1),
+('ivan', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Ivan', 'ivan@company.com', 'user', 1, 1),
+('jireh', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Jireh', 'jireh@company.com', 'user', 1, 1),
+('kong', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Kong', 'kong@company.com', 'user', 2, 1),
+('julie', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Julie', 'julie@company.com', 'user', 3, 1),
+('rodavallo', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Rodavallo', 'rodavallo@company.com', 'user', 4, 1),
+('raquel', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Raquel', 'raquel@company.com', 'user', 5, 1),
+('leony', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Leony', 'leony@company.com', 'user', 6, 1),
+('jake', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Jake', 'jake@company.com', 'user', 7, 1),
+('jennybel', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Jennybel', 'jennybel@company.com', 'user', 8, 1),
+('geille', SHA2('${SEED_DEFAULT_PASSWORD}', 256), 'Geille', 'geille@company.com', 'user', 9, 1);
 
 -- Projects (based on Excel data)
 INSERT INTO projects (department_id, project_name, owner_id, owner_name, stage, progress, start_date, due_date, priority, status, description, created_by) VALUES
@@ -401,42 +403,18 @@ AFTER INSERT ON projects
 FOR EACH ROW
 BEGIN
     INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
-    VALUES (NEW.created_by, COALESCE((SELECT full_name FROM users WHERE id = NEW.created_by), 'System'), NEW.id, NEW.project_name, 'create', CONCAT('Project "', NEW.project_name, '" was created'));
+    VALUES (NEW.created_by, NEW.owner_name, NEW.id, NEW.project_name, 'create',
+            CONCAT('Project created: ', NEW.project_name));
 END //
 
--- Auto-log project updates (when stage changes)
+-- Auto-log project updates
 CREATE TRIGGER trg_project_updated
 AFTER UPDATE ON projects
 FOR EACH ROW
 BEGIN
-    IF OLD.stage != NEW.stage THEN
-        INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
-        VALUES (NULL, 'System', NEW.id, NEW.project_name, 'stage', CONCAT('Stage changed from ', OLD.stage, ' to ', NEW.stage));
-    END IF;
-    IF OLD.progress != NEW.progress THEN
-        INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
-        VALUES (NULL, 'System', NEW.id, NEW.project_name, 'progress', CONCAT('Progress updated from ', OLD.progress, '% to ', NEW.progress, '%'));
-    END IF;
+    INSERT INTO activity_logs (user_id, user_name, project_id, project_name, action_type, description)
+    VALUES (NEW.created_by, NEW.owner_name, NEW.id, NEW.project_name, 'update',
+            CONCAT('Project updated: ', NEW.project_name));
 END //
 
 DELIMITER ;
-
--- ============================================================
--- SAMPLE QUERIES (commented out - run manually)
--- ============================================================
-
--- Get all projects with department info:
--- SELECT p.*, d.department_name FROM projects p JOIN departments d ON p.department_id = d.id;
-
--- Get overdue projects:
--- SELECT * FROM v_overdue_projects;
-
--- Get projects by owner:
--- SELECT owner_name, COUNT(*) AS project_count, ROUND(AVG(progress), 2) AS avg_progress
--- FROM projects GROUP BY owner_name ORDER BY project_count DESC;
-
--- Get user permissions:
--- SELECT * FROM permissions WHERE role = 'user';
-
--- Search projects:
--- SELECT * FROM projects WHERE project_name LIKE '%Automation%' OR owner_name LIKE '%Harold%';

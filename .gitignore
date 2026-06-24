@@ -1,7 +1,13 @@
 node_modules/
 .env
+.env.*
+!.env.example
 .env.local
 .env.webstation
+env.js
+mobile-app/www/env.js
+firebase-public/env.js
+mobile-app/android/app/src/main/assets/public/env.js
 *.log
 .DS_Store
 Thumbs.db
@@ -32,6 +38,15 @@ excel_*.csv
 
 # Exclude original HTML (we use index.html for GitHub Pages)
 ProcessAutomationDashboard.html
+
+# Generated seed SQL files (rendered from templates by scripts/render-seed-sql.js)
+process_automation_db.sql
+cloud-deploy/schema-postgres.sql
+
+# Mobile build artifacts (regenerate from source; may contain stale env values)
+mobile/build/
+mobile-app/www/
+mobile-app/android/app/src/main/assets/public/
 
 # Docker (not used for Render)
 Dockerfile

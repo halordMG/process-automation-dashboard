@@ -1,5 +1,10 @@
 -- PostgreSQL schema for Process Automation Dashboard
 -- Deploy via Render, Supabase, or any managed PostgreSQL service
+--
+-- NOTE: This is a TEMPLATE. Run scripts/render-seed-sql.js to
+-- generate the actual schema-postgres.sql file with password
+-- values substituted from your .env file.
+--
 
 -- Departments table
 CREATE TABLE IF NOT EXISTS departments (
@@ -87,12 +92,12 @@ INSERT INTO departments (department_name) VALUES
     ('Brandify (Trade Marketing)')
 ON CONFLICT (department_name) DO NOTHING;
 
--- Seed admin user (password: admin123, SHA-256 hash)
+-- Seed admin user (configured via SEED_ADMIN_PASSWORD in .env)
 INSERT INTO users (username, password_hash, full_name, role, department_id, is_active) VALUES
-    ('admin', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'Admin User', 'admin', 1, 1)
+    ('admin', '${SEED_ADMIN_PASSWORD_HASH}', 'Admin User', 'admin', 1, 1)
 ON CONFLICT (username) DO NOTHING;
 
--- Seed regular user (password: harold123, SHA-256 hash)
+-- Seed regular user (configured via SEED_DEFAULT_PASSWORD in .env)
 INSERT INTO users (username, password_hash, full_name, role, department_id, is_active) VALUES
-    ('harold', '9d16d1b075170ed04f84b5c351a7fdb254736147d57538eeb5da9f4b18522804', 'Harold User', 'user', 1, 1)
+    ('harold', '${SEED_DEFAULT_PASSWORD_HASH}', 'Harold User', 'user', 1, 1)
 ON CONFLICT (username) DO NOTHING;
