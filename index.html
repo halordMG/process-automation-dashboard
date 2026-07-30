@@ -3067,7 +3067,8 @@
                 // Validate the stored token with the backend before restoring the UI.
                 const me = await api.auth.me();
                 if (me && me.user) {
-                  setCurrentUser(me.user);
+                  const user = { ...me.user, name: me.user.name || me.user.full_name };
+                  setCurrentUser(user);
                   setIsLoggedIn(true);
                 }
               }
