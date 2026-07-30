@@ -1396,6 +1396,58 @@
       );
     }
 
+    function ResetPasswordModal({ user, isOpen, onClose, onSave, busy }) {
+      const [password, setPassword] = useState('');
+      const [confirm, setConfirm] = useState('');
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        if (isOpen) {
+          setPassword('');
+          setConfirm('');
+          setError(null);
+        }
+      }, [isOpen]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!password) {
+          setError('Password is required');
+          return;
+        }
+        if (password !== confirm) {
+          setError('Passwords do not match');
+          return;
+        }
+        try {
+          await onSave(user, password);
+          onClose();
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      return (
+        <Modal isOpen={isOpen} onClose={onClose} title={`Reset Password: ${user?.full_name || user?.username || ''}`}>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && <div className="p-3 bg-rose-50 text-rose-700 rounded-lg text-sm">{error}</div>}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm" placeholder="Enter new password" required />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+              <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm" placeholder="Confirm new password" required />
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2 border-t border-slate-100">
+              <button type="button" onClick={onClose} className="w-full sm:w-auto px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+              <button type="submit" disabled={busy} className="w-full sm:w-auto px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm disabled:opacity-50">{busy ? 'Saving...' : 'Reset Password'}</button>
+            </div>
+          </form>
+        </Modal>
+      );
+    }
+
     function MobileHeader({ currentUser, onMenuClick, onToggleAI, aiOpen, title, subtitle }) {
       return (
         <header className="lg:hidden bg-white border-b border-slate-200 flex items-center justify-between px-4 shrink-0" style={{ minHeight: 'var(--header-h)', paddingTop: 'var(--safe-top)' }}>
@@ -1777,7 +1829,7 @@
       );
     }
 
-    function UserCard({ u, onEditUser, onDeleteUser }) {
+    function UserCard({ u, onEditUser, onDeleteUser, onResetPassword }) {
       return (
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
           <div className="flex items-center gap-3">
@@ -1803,6 +1855,7 @@
             </div>
           </div>
           <div className="flex items-center justify-end gap-1 pt-2 border-t border-slate-50">
+            <button onClick={() => onResetPassword(u)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition" title="Reset Password"><ICONS.Lock className="w-4 h-4" /></button>
             <button onClick={() => onEditUser(u)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition" title="Edit"><ICONS.Edit className="w-4 h-4" /></button>
             {u.role !== 'admin' && <button onClick={() => onDeleteUser(u.id)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Delete"><ICONS.Trash className="w-4 h-4" /></button>}
           </div>
@@ -2046,7 +2099,7 @@
       );
     }
 
-    function UsersView({ onEditUser, onDeleteUser, onAddUser, departments, users: allUsers }) {
+    function UsersView({ onEditUser, onDeleteUser, onResetPassword, onAddUser, departments, users: allUsers }) {
       const [search, setSearch] = useState('');
 
       const filtered = useMemo(() => {
@@ -2070,7 +2123,7 @@
           {/* Mobile cards */}
           <div className="grid grid-cols-1 gap-4 lg:hidden">
             {filtered.map(u => (
-              <UserCard key={u.id} u={u} onEditUser={onEditUser} onDeleteUser={onDeleteUser} />
+              <UserCard key={u.id} u={u} onEditUser={onEditUser} onDeleteUser={onDeleteUser} onResetPassword={onResetPassword} />
             ))}
           </div>
 
@@ -2107,6 +2160,7 @@
                     <td className="p-3 text-slate-500 text-xs">{u.department_name || u.department}</td>
                     <td className="p-3">
                       <div className="flex items-center gap-1.5">
+                        <button onClick={() => onResetPassword(u)} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition" title="Reset Password"><ICONS.Lock className="w-4 h-4" /></button>
                         <button onClick={() => onEditUser(u)} className="p-1.5 text-slate-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition" title="Edit"><ICONS.Edit className="w-4 h-4" /></button>
                         {u.role !== 'admin' && <button onClick={() => onDeleteUser(u.id)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Delete"><ICONS.Trash className="w-4 h-4" /></button>}
                       </div>
@@ -3024,6 +3078,8 @@
       const [editingItem, setEditingItem] = useState(null);
       const [deleteConfirm, setDeleteConfirm] = useState(null);
       const [deleteType, setDeleteType] = useState(null);
+      const [resetPasswordUser, setResetPasswordUser] = useState(null);
+      const [resetPasswordBusy, setResetPasswordBusy] = useState(false);
       const [confirmSave, setConfirmSave] = useState(null);
       const [saveBusy, setSaveBusy] = useState(false);
       const [logoutConfirm, setLogoutConfirm] = useState(false);
@@ -3246,6 +3302,28 @@
         }
       };
 
+      const handleResetPassword = async (user, password) => {
+        setResetPasswordBusy(true);
+        try {
+          await api.users.update(user.id, {
+            full_name: user.full_name,
+            email: user.email,
+            role: user.role,
+            department_id: user.department_id,
+            is_active: user.is_active,
+            password
+          });
+          await loadUsers();
+          setResetPasswordUser(null);
+          alert(`Password for ${user.full_name || user.username} has been reset.`);
+        } catch (err) {
+          alert(err.message);
+          throw err;
+        } finally {
+          setResetPasswordBusy(false);
+        }
+      };
+
       const handleDeleteUser = async (id) => {
         await api.users.delete(id);
         await loadUsers();
@@ -3410,6 +3488,7 @@
                 <UsersView
                   onEditUser={u => openModal('user', u)}
                   onDeleteUser={id => { setDeleteConfirm(id); setDeleteType('user'); }}
+                  onResetPassword={u => setResetPasswordUser(u)}
                   onAddUser={() => openModal('user')}
                   departments={departments}
                   users={users}
@@ -3463,6 +3542,14 @@
             confirmText="Sign Out"
             confirmVariant="rose"
             onConfirm={handleConfirmLogout}
+          />
+
+          <ResetPasswordModal
+            user={resetPasswordUser}
+            isOpen={!!resetPasswordUser}
+            onClose={() => setResetPasswordUser(null)}
+            onSave={handleResetPassword}
+            busy={resetPasswordBusy}
           />
 
           <OnboardingTour
