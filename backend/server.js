@@ -468,6 +468,31 @@ app.put('/api/users/:id', authMiddleware, rbac.requirePermission('users', 'updat
   }
 });
 
+// Allow any authenticated user to update their own profile (full_name, email, password).
+app.put('/api/users/me', authMiddleware, async (req, res) => {
+  try {
+    const p = db.isPostgres();
+    const userId = req.user.id;
+    const { full_name, email, password } = req.body;
+
+    if (password && password.trim()) {
+      const passHash = crypto.createHash('sha256').update(password).digest('hex');
+      await run(`
+        UPDATE users SET full_name=${p ? '$1' : '?'}, email=${p ? '$2' : '?'}, password_hash=${p ? '$3' : '?'}, updated_at=CURRENT_TIMESTAMP WHERE id=${p ? '$4' : '?'}
+      `, [full_name, email, passHash, userId]);
+    } else {
+      await run(`
+        UPDATE users SET full_name=${p ? '$1' : '?'}, email=${p ? '$2' : '?'}, updated_at=CURRENT_TIMESTAMP WHERE id=${p ? '$3' : '?'}
+      `, [full_name, email, userId]);
+    }
+
+    res.json({ message: 'Profile updated' });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete('/api/users/:id', authMiddleware, rbac.requirePermission('users', 'delete'), async (req, res) => {
   try {
     const p = db.isPostgres();

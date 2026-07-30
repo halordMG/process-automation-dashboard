@@ -3260,6 +3260,9 @@
           const idx = mockUsers.findIndex(u => u.id === user.id || u.username === user.username);
           if (idx !== -1) mockUsers[idx] = { ...mockUsers[idx], ...updates, full_name: nextName };
           mockCurrentUser = { ...(mockCurrentUser || (idx !== -1 ? mockUsers[idx] : null) || user), ...updates, full_name: nextName };
+        } else {
+          // Persist profile changes (including password) to the backend.
+          await api.request('/users/me', { method: 'PUT', body: { full_name: updates.full_name, email: updates.email, password: updates.password } });
         }
         try {
           localStorage.setItem('pad_auth_user', JSON.stringify(updated));
