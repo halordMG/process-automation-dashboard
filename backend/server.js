@@ -444,31 +444,8 @@ app.post('/api/users', authMiddleware, rbac.requirePermission('users', 'create')
   }
 });
 
-app.put('/api/users/:id', authMiddleware, rbac.requirePermission('users', 'update'), async (req, res) => {
-  try {
-    const p = db.isPostgres();
-    const { id } = req.params;
-    const { full_name, email, role, department_id, is_active, password } = req.body;
-
-    if (password && password.trim()) {
-      const passHash = crypto.createHash('sha256').update(password).digest('hex');
-      await run(`
-        UPDATE users SET full_name=${p ? '$1' : '?'}, email=${p ? '$2' : '?'}, role=${p ? '$3' : '?'}, department_id=${p ? '$4' : '?'}, is_active=${p ? '$5' : '?'}, password_hash=${p ? '$6' : '?'}, updated_at=CURRENT_TIMESTAMP WHERE id=${p ? '$7' : '?'}
-      `, [full_name, email, role, department_id, is_active, passHash, id]);
-    } else {
-      await run(`
-        UPDATE users SET full_name=${p ? '$1' : '?'}, email=${p ? '$2' : '?'}, role=${p ? '$3' : '?'}, department_id=${p ? '$4' : '?'}, is_active=${p ? '$5' : '?'}, updated_at=CURRENT_TIMESTAMP WHERE id=${p ? '$6' : '?'}
-      `, [full_name, email, role, department_id, is_active, id]);
-    }
-
-    res.json({ message: 'User updated' });
-  } catch (err) {
-    console.error('Update user error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Allow any authenticated user to update their own profile (full_name, email, password).
+// This route must be defined BEFORE /api/users/:id so Express matches it first.
 app.put('/api/users/me', authMiddleware, async (req, res) => {
   try {
     const p = db.isPostgres();
@@ -489,6 +466,30 @@ app.put('/api/users/me', authMiddleware, async (req, res) => {
     res.json({ message: 'Profile updated' });
   } catch (err) {
     console.error('Update profile error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/users/:id', authMiddleware, rbac.requirePermission('users', 'update'), async (req, res) => {
+  try {
+    const p = db.isPostgres();
+    const { id } = req.params;
+    const { full_name, email, role, department_id, is_active, password } = req.body;
+
+    if (password && password.trim()) {
+      const passHash = crypto.createHash('sha256').update(password).digest('hex');
+      await run(`
+        UPDATE users SET full_name=${p ? '$1' : '?'}, email=${p ? '$2' : '?'}, role=${p ? '$3' : '?'}, department_id=${p ? '$4' : '?'}, is_active=${p ? '$5' : '?'}, password_hash=${p ? '$6' : '?'}, updated_at=CURRENT_TIMESTAMP WHERE id=${p ? '$7' : '?'}
+      `, [full_name, email, role, department_id, is_active, passHash, id]);
+    } else {
+      await run(`
+        UPDATE users SET full_name=${p ? '$1' : '?'}, email=${p ? '$2' : '?'}, role=${p ? '$3' : '?'}, department_id=${p ? '$4' : '?'}, is_active=${p ? '$5' : '?'}, updated_at=CURRENT_TIMESTAMP WHERE id=${p ? '$6' : '?'}
+      `, [full_name, email, role, department_id, is_active, id]);
+    }
+
+    res.json({ message: 'User updated' });
+  } catch (err) {
+    console.error('Update user error:', err);
     res.status(500).json({ error: err.message });
   }
 });
