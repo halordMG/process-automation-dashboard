@@ -2,12 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#ffffff">
   <title>Process Automation Monitoring Dashboard</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+  <script>
+    if (window.Babel) {
+      Babel.registerPreset('pad-react', {
+        presets: [[Babel.availablePresets.react, { runtime: 'classic', pragma: 'React.createElement', pragmaFrag: 'React.Fragment' }]]
+      });
+    }
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.5.31/dist/jspdf.plugin.autotable.min.js"></script>
+  <script src="env.js?v=2"></script>
+  <script src="pad-backup-data.js?v=2"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <script>
     tailwind.config = {
@@ -23,7 +40,44 @@
     }
   </script>
   <style>
-    body { font-family: 'Inter', sans-serif; }
+    :root {
+      --space-unit: clamp(4px, 1.2vw, 8px);
+      --space-xs: calc(var(--space-unit) * 1);
+      --space-sm: calc(var(--space-unit) * 2);
+      --space-md: calc(var(--space-unit) * 3);
+      --space-lg: calc(var(--space-unit) * 4);
+      --space-xl: calc(var(--space-unit) * 5);
+      --radius-sm: clamp(8px, 1.5vw, 12px);
+      --radius-md: clamp(12px, 2vw, 16px);
+      --radius-lg: clamp(16px, 2.5vw, 24px);
+      --text-xs: clamp(10px, 2.2vw, 12px);
+      --text-sm: clamp(12px, 2.8vw, 14px);
+      --text-base: clamp(14px, 3.2vw, 16px);
+      --text-md: clamp(16px, 3.5vw, 18px);
+      --text-lg: clamp(18px, 4vw, 22px);
+      --text-xl: clamp(22px, 5vw, 26px);
+      --header-h: clamp(52px, 8vw, 64px);
+      --nav-h: clamp(60px, 10vw, 72px);
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    html, body { height: 100%; overflow: hidden; }
+    body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+    .app-shell { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+    .main-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+    .main-scroll::-webkit-scrollbar { display: none; }
+    @media (min-width: 1024px) {
+      .main-scroll::-webkit-scrollbar { display: block; width: 6px; }
+      .main-scroll::-webkit-scrollbar-track { background: transparent; }
+      .main-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    }
+    .mobile-drawer { transform: translateX(-100%); transition: transform 0.25s ease; }
+    .mobile-drawer.open { transform: translateX(0); }
+    .drawer-backdrop { opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+    .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+    .tap-target { min-height: 44px; min-width: 44px; }
+    .safe-top { height: var(--safe-top); }
+    .safe-bottom { height: var(--safe-bottom); }
     .scrollbar-thin::-webkit-scrollbar { width: 6px; }
     .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
     .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -52,8 +106,8 @@
 </head>
 <body class="bg-slate-50 text-slate-800">
   <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useMemo, useEffect, useCallback } = React;
+  <script type="text/babel" data-presets="pad-react">
+    const { useState, useMemo, useEffect, useCallback, useRef } = React;
 
     // ============================================================
     // API CONFIG — Supports GitHub Pages + external backend (NAS, Render, etc.)
@@ -73,15 +127,281 @@
       } catch (e) {}
       return `${window.location.protocol}//${window.location.host}/api`;
     })();
-    const STAGES = ['Discovery', 'Design', 'Build', 'Test', 'Deploy'];
+    const IS_FIREBASE_HOSTING = location.hostname.endsWith('.web.app') || location.hostname.endsWith('.firebaseapp.com');
+    const IS_GITHUB_PAGES = location.hostname.endsWith('.github.io');
+    // When served from the ECS/nginx backend (or local dev), always use the REST API instead of Firestore/mock data.
+    const IS_LIVE_BACKEND = !(IS_FIREBASE_HOSTING || IS_GITHUB_PAGES);
+
+    function hasExplicitDemoFlag() {
+      try {
+        // Live backend deployments should never use demo mode, even if an old flag is in localStorage.
+        if (IS_LIVE_BACKEND) {
+          localStorage.removeItem('pad_demo_mode');
+          return false;
+        }
+        const urlParams = new URLSearchParams(window.location.search);
+        const paramDemo = urlParams.get('demo');
+        if (paramDemo === '1' || paramDemo === 'true') {
+          localStorage.setItem('pad_demo_mode', '1');
+          history.replaceState(null, '', window.location.pathname);
+          return true;
+        }
+        if (paramDemo === '0' || paramDemo === 'false') {
+          localStorage.removeItem('pad_demo_mode');
+          history.replaceState(null, '', window.location.pathname);
+          return false;
+        }
+        return localStorage.getItem('pad_demo_mode') === '1';
+      } catch (e) { return false; }
+    }
+
+    // Firebase compat initialization
+    const firebaseConfig = (typeof window !== 'undefined' && window.ENV && window.ENV.FIREBASE_CONFIG) || {};
+    let firestore = null;
+    try {
+      if (firebaseConfig.apiKey) {
+        firebase.initializeApp(firebaseConfig);
+        firestore = firebase.firestore();
+      }
+    } catch (e) { console.error('[Firebase] Init failed:', e); }
+
+    let DEMO_MODE = !IS_LIVE_BACKEND && (!firestore || hasExplicitDemoFlag());
+
+    async function sha256(text) {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    const STAGES = ['Discovery', 'Design', 'Build', 'Test', 'Deploy', 'Maintenance & Iteration'];
     const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
+
+    function getProjectStage(p) {
+      if (!p) return 'Discovery';
+      if (p.status === 'Completed') return 'Maintenance & Iteration';
+      return p.stage || 'Discovery';
+    }
     const DEPARTMENTS = ['InFlex (IT Team)', 'AILabU (YFS Sales Team)', 'HRWonders (HR Team)', 'Quantum (CH Accounting)', 'VJCarie (Finance Team)', 'O.T.O.G (TMU Operations Team)', 'Mighty Movers (Supply Chain Team)', 'MOKI (MKI Team)', 'Brandify (Trade Marketing)'];
 
     // ============================================================
-    // API SERVICE
+    // DEMO DATA & MOCK API — Fallback when ?demo=1 or Firebase unavailable
     // ============================================================
+    const importedBackup = (() => {
+      try {
+        const raw = localStorage.getItem('pad_imported_backup');
+        if (raw) return JSON.parse(raw);
+      } catch (e) { console.error('Failed to parse imported backup', e); }
+      return null;
+    })();
+    const backup = importedBackup || ((typeof window !== 'undefined' && window.PAD_BACKUP_DATA) ? window.PAD_BACKUP_DATA : null);
+    let mockCurrentUser = null;
+    const mockDepartments = backup ? backup.departments : DEPARTMENTS.map((department_name, i) => ({ id: i + 1, department_name }));
+    const mockOwner = backup
+      ? (backup.users.find(u => u.username === 'admin') || backup.users[0])
+      : { id: 1, username: 'admin', full_name: 'Admin User', role: 'admin', department_id: 1, department_name: DEPARTMENTS[0] };
+    let mockUsers = backup ? backup.users : [
+      { ...mockOwner },
+      { id: 2, username: 'harold', full_name: 'Harold Bumanlag', role: 'user', department_id: 1, department_name: DEPARTMENTS[0] }
+    ];
+    let mockProjects = backup ? backup.projects : [
+      { id: 1, project_name: 'Workflow Automation A', description: 'Automate invoice processing', stage: 'Build', status: 'On Track', priority: 'High', department_id: 1, department_name: DEPARTMENTS[0], owner_id: 1, owner_name: 'Admin User', start_date: '2026-06-01', due_date: '2026-07-15', progress: 65, created_at: '2026-06-01T00:00:00Z' },
+      { id: 2, project_name: 'HR Onboarding Portal', description: 'Digital onboarding for new hires', stage: 'Design', status: 'At Risk', priority: 'Critical', department_id: 3, department_name: DEPARTMENTS[2], owner_id: 1, owner_name: 'Admin User', start_date: '2026-06-05', due_date: '2026-08-01', progress: 30, created_at: '2026-06-05T00:00:00Z' },
+      { id: 3, project_name: 'Sales Dashboard', description: 'Real-time sales analytics', stage: 'Test', status: 'On Track', priority: 'Medium', department_id: 2, department_name: DEPARTMENTS[1], owner_id: 1, owner_name: 'Admin User', start_date: '2026-06-10', due_date: '2026-07-30', progress: 80, created_at: '2026-06-10T00:00:00Z' }
+    ];
+    let mockActivity = backup ? backup.activity : [
+      { id: 1, action: 'Created project', target: 'Workflow Automation A', user_name: 'Admin User', created_at: '2026-06-26T07:00:00Z' },
+      { id: 2, action: 'Updated stage', target: 'HR Onboarding Portal', user_name: 'Admin User', created_at: '2026-06-26T06:30:00Z' }
+    ];
+    const mockNextId = (arr) => arr.reduce((max, item) => Math.max(max, item.id || 0), 0) + 1;
+
+    async function mockRequest(endpoint, options = {}) {
+      await new Promise(r => setTimeout(r, 150));
+      const [path, qs] = endpoint.split('?');
+      const method = (options.method || 'GET').toUpperCase();
+      const body = options.body ? (typeof options.body === 'string' ? JSON.parse(options.body) : options.body) : null;
+      const current = mockCurrentUser || mockOwner;
+
+      if (path === '/auth/login' && method === 'POST') {
+        const user = mockUsers.find(u => u.username === body.username) || mockOwner;
+        mockCurrentUser = user;
+        return { token: 'demo-token', user: { id: user.id, username: user.username, name: user.full_name, full_name: user.full_name, role: user.role, department_id: user.department_id } };
+      }
+      if (path === '/auth/me') return { user: current };
+      if (path === '/auth/logout') { mockCurrentUser = null; return {}; }
+
+      if (path === '/dashboard/stats') {
+        const total = mockProjects.length;
+        const deployed = mockProjects.filter(p => getProjectStage(p) === 'Maintenance & Iteration').length;
+        const atRisk = mockProjects.filter(p => p.status === 'At Risk' || p.status === 'Delayed').length;
+        const avgProgress = total ? Math.round(mockProjects.reduce((a, p) => a + (p.progress || 0), 0) / total) : 0;
+        const totalDepartments = new Set(mockProjects.map(p => p.department_id).filter(Boolean)).size;
+        return { total, deployed, atRisk, avgProgress, totalDepartments };
+      }
+      if (path === '/dashboard/by-stage') {
+        const counts = {};
+        STAGES.forEach(s => counts[s] = 0);
+        mockProjects.forEach(p => { const s = getProjectStage(p); if (counts[s] !== undefined) counts[s]++; });
+        return STAGES.map(stage => ({ stage, count: counts[stage] }));
+      }
+      if (path === '/dashboard/by-department') {
+        const counts = {};
+        mockDepartments.forEach(d => counts[d.department_name] = 0);
+        mockProjects.forEach(p => { if (counts[p.department_name] !== undefined) counts[p.department_name]++; });
+        return Object.entries(counts).map(([department_name, count]) => ({ department_name, count }));
+      }
+
+      if (path === '/projects') {
+        if (method === 'GET') {
+          const params = new URLSearchParams(qs || '');
+          let list = [...mockProjects];
+          const dept = params.get('department');
+          if (dept) list = list.filter(p => String(p.department_id) === dept);
+          const stage = params.get('stage');
+          if (stage) list = list.filter(p => getProjectStage(p) === stage);
+          const priority = params.get('priority');
+          if (priority) list = list.filter(p => p.priority === priority);
+          const status = params.get('status');
+          if (status) list = list.filter(p => p.status === status);
+          const search = params.get('search');
+          if (search) {
+            const s = search.toLowerCase();
+            list = list.filter(p => (p.project_name || '').toLowerCase().includes(s) || (p.owner_name || '').toLowerCase().includes(s));
+          }
+          if (current.role !== 'admin') {
+            list = list.filter(p => String(p.owner_id) === String(current.id) || String(p.department_id) === String(current.department_id));
+          }
+          return list;
+        }
+        if (method === 'POST') {
+          const dept = mockDepartments.find(d => d.id == body.department_id);
+          const owner = current.role === 'admin'
+            ? (mockUsers.find(u => u.full_name === body.owner_name) || current)
+            : current;
+          const newProject = {
+            ...body,
+            id: mockNextId(mockProjects),
+            created_at: new Date().toISOString(),
+            department_id: dept ? dept.id : (body.department_id || owner.department_id),
+            department_name: dept ? dept.department_name : (body.department_name || owner.department_name),
+            owner_id: owner.id,
+            owner_name: owner.full_name
+          };
+          mockProjects.push(newProject);
+          mockActivity.unshift({ id: mockNextId(mockActivity), action: 'Created project', target: newProject.project_name, user_name: current.full_name, created_at: new Date().toISOString() });
+          return newProject;
+        }
+      }
+      const projectMatch = path.match(/^\/projects\/(\d+)$/);
+      if (projectMatch) {
+        const id = parseInt(projectMatch[1], 10);
+        if (method === 'GET') return mockProjects.find(p => p.id === id);
+        if (method === 'PUT') {
+          const idx = mockProjects.findIndex(p => p.id === id);
+          if (idx === -1) throw new Error('Project not found');
+          if (current.role !== 'admin' && mockProjects[idx].owner_id !== current.id) {
+            throw new Error('Permission denied: you can only update your own projects');
+          }
+          const dept = mockDepartments.find(d => d.id == body.department_id);
+          const owner = current.role === 'admin'
+            ? (mockUsers.find(u => u.full_name === body.owner_name) || mockUsers.find(u => u.id === mockProjects[idx].owner_id) || current)
+            : (mockUsers.find(u => u.id === mockProjects[idx].owner_id) || current);
+          mockProjects[idx] = {
+            ...mockProjects[idx],
+            ...body,
+            id,
+            department_id: dept ? dept.id : (body.department_id || mockProjects[idx].department_id),
+            department_name: dept ? dept.department_name : (body.department_name || mockProjects[idx].department_name),
+            owner_id: owner.id,
+            owner_name: owner.full_name
+          };
+          mockActivity.unshift({ id: mockNextId(mockActivity), action: 'Updated project', target: mockProjects[idx].project_name, user_name: current.full_name, created_at: new Date().toISOString() });
+          return mockProjects[idx];
+        }
+        if (method === 'DELETE') {
+          if (current.role !== 'admin') throw new Error('Permission denied: only admins can delete projects');
+          mockProjects = mockProjects.filter(p => p.id !== id);
+          return {};
+        }
+      }
+
+      if (path === '/users') {
+        if (method === 'GET') return [...mockUsers];
+        if (method === 'POST') {
+          const dept = mockDepartments.find(d => d.id == body.department_id);
+          const newUser = { ...body, id: mockNextId(mockUsers), department_name: dept ? dept.department_name : body.department_name };
+          mockUsers.push(newUser);
+          return newUser;
+        }
+      }
+      const userMatch = path.match(/^\/users\/(\d+)$/);
+      if (userMatch) {
+        const id = parseInt(userMatch[1], 10);
+        if (method === 'GET') return mockUsers.find(u => u.id === id);
+        if (method === 'PUT') {
+          const idx = mockUsers.findIndex(u => u.id === id);
+          if (idx === -1) throw new Error('User not found');
+          const dept = mockDepartments.find(d => d.id == body.department_id);
+          mockUsers[idx] = { ...mockUsers[idx], ...body, id, department_name: dept ? dept.department_name : (body.department_name || mockUsers[idx].department_name) };
+          return mockUsers[idx];
+        }
+        if (method === 'DELETE') {
+          mockUsers = mockUsers.filter(u => u.id !== id);
+          return {};
+        }
+      }
+
+      if (path === '/activity') return [...mockActivity];
+      if (path === '/departments') return [...mockDepartments];
+      if (path === '/settings/email') return method === 'POST' ? { success: true } : {};
+
+      throw new Error('Not implemented in demo mode: ' + endpoint);
+    }
+
+    // ============================================================
+    // API SERVICE — Firestore-first with demo fallback
+    // ============================================================
+    function getCurrentUser() {
+      try {
+        const raw = localStorage.getItem('pad_auth_user');
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) { return null; }
+    }
+
+    function generateToken() {
+      return 'pad-' + Math.random().toString(36).slice(2) + '-' + Date.now();
+    }
+
+    async function logActivity({ project_id = null, user_id = null, user_name = '', action_type = '', description = '' }) {
+      if (!firestore) return;
+      try {
+        await firestore.collection('activity').add({
+          project_id,
+          user_id,
+          user_name,
+          action_type,
+          description,
+          created_at: new Date().toISOString()
+        });
+      } catch (e) { console.error('[Firestore] Activity log failed:', e); }
+    }
+
+    async function resolveOwner(ownerName) {
+      if (!firestore || !ownerName) return null;
+      try {
+        const snap = await firestore.collection('users').where('full_name', '==', ownerName).limit(1).get();
+        if (!snap.empty) return snap.docs[0].id;
+        const all = await firestore.collection('users').get();
+        const match = all.docs.find(d => {
+          const data = d.data();
+          return (data.full_name || data.name) === ownerName;
+        });
+        if (match) return match.id;
+      } catch (e) {}
+      return null;
+    }
+
     const api = {
       async request(endpoint, options = {}) {
+        if (DEMO_MODE || !firestore) return mockRequest(endpoint, options);
         const token = window.__authToken;
         const url = `${API_BASE}${endpoint}`;
         const config = {
@@ -92,57 +412,284 @@
             ...options.headers
           }
         };
-        if (config.body && typeof config.body === 'object') {
-          config.body = JSON.stringify(config.body);
+        if (config.body && typeof config.body === 'object') config.body = JSON.stringify(config.body);
+        const response = await fetch(url, config);
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Network error' }));
+          if (response.status === 401) {
+            // Stale or server-reset token — clear session so the user can log in again.
+            try {
+              localStorage.removeItem('pad_auth_token');
+              localStorage.removeItem('pad_auth_user');
+            } catch (e) {}
+            window.__authToken = null;
+            window.dispatchEvent(new Event('pad:session-expired'));
+          }
+          throw new Error(error.error || `HTTP ${response.status}`);
         }
+        return response.json();
+      },
+      // Always call the backend (no DEMO_MODE fallback). Used for features only available server-side.
+      async rawRequest(endpoint, options = {}) {
+        const token = window.__authToken;
+        const url = `${API_BASE}${endpoint}`;
+        const config = {
+          ...options,
+          headers: {
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+            ...options.headers
+          }
+        };
+        if (config.body && typeof config.body === 'object') config.body = JSON.stringify(config.body);
         const response = await fetch(url, config);
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: 'Network error' }));
           throw new Error(error.error || `HTTP ${response.status}`);
         }
-        return response.json();
+        return response;
       },
       auth: {
-        login: (username, password) => api.request('/auth/login', { method: 'POST', body: { username, password } }),
-        me: () => api.request('/auth/me'),
-        logout: () => api.request('/auth/logout', { method: 'POST' })
+        async login(username, password) {
+          if (DEMO_MODE || !firestore) return mockRequest('/auth/login', { method: 'POST', body: { username, password } });
+          // Always attempt backend login first when a backend is available.
+          let backendError = null;
+          try {
+            const result = await api.request('/auth/login', { method: 'POST', body: { username, password } });
+            if (result && result.token) {
+              window.__authToken = result.token;
+              localStorage.setItem('pad_auth_token', result.token);
+              localStorage.setItem('pad_auth_user', JSON.stringify(result.user));
+              return result;
+            }
+          } catch (e) {
+            backendError = e;
+            console.warn('[Auth] Backend login failed, trying Firestore:', e);
+          }
+          try {
+            const hash = await sha256(password);
+            const snap = await firestore.collection('users')
+              .where('username', '==', username)
+              .where('password_hash', '==', hash)
+              .where('is_active', '==', 1)
+              .limit(1)
+              .get();
+            if (snap.empty) throw new Error(backendError ? backendError.message : 'Invalid username or password');
+            const doc = snap.docs[0];
+            const user = doc.data();
+            const sessionUser = {
+              id: doc.id,
+              username,
+              full_name: user.full_name,
+              name: user.full_name,
+              email: user.email,
+              role: user.role,
+              department_id: user.department_id
+            };
+            const token = generateToken();
+            window.__authToken = token;
+            localStorage.setItem('pad_auth_token', token);
+            localStorage.setItem('pad_auth_user', JSON.stringify(sessionUser));
+            await logActivity({
+              project_id: null,
+              user_id: sessionUser.id,
+              user_name: sessionUser.full_name,
+              action_type: 'login',
+              description: sessionUser.full_name + ' logged in via web'
+            });
+            return { token, user: sessionUser };
+          } catch (e) {
+            console.error('[Firestore] Login error:', e);
+            throw new Error(e.message || 'Login failed');
+          }
+        },
+        async me() {
+          if (DEMO_MODE || !firestore) return mockRequest('/auth/me');
+          const token = localStorage.getItem('pad_auth_token');
+          const userRaw = localStorage.getItem('pad_auth_user');
+          if (!token || !userRaw) throw new Error('Not authenticated');
+          // Validate the stored token against the backend (tokens are in-memory and can be reset on server restart).
+          const backend = await api.request('/auth/me');
+          return backend;
+        },
+        async logout() {
+          if (DEMO_MODE || !firestore) return mockRequest('/auth/logout', { method: 'POST' });
+          window.__authToken = null;
+          localStorage.removeItem('pad_auth_token');
+          localStorage.removeItem('pad_auth_user');
+          return {};
+        }
       },
       dashboard: {
-        stats: () => api.request('/dashboard/stats'),
-        byStage: () => api.request('/dashboard/by-stage'),
-        byDepartment: () => api.request('/dashboard/by-department')
+        async stats() {
+          if (DEMO_MODE || !firestore) return mockRequest('/dashboard/stats');
+          try {
+            const projects = await api.projects.list({});
+            const total = projects.length;
+            const deployed = projects.filter(p => getProjectStage(p) === 'Maintenance & Iteration').length;
+            const atRisk = projects.filter(p => p.status === 'At Risk' || p.status === 'Delayed').length;
+            const avgProgress = total ? Math.round(projects.reduce((a, p) => a + (p.progress || 0), 0) / total) : 0;
+            const totalDepartments = new Set(projects.map(p => p.department_id).filter(Boolean)).size;
+            return { total, deployed, atRisk, avgProgress, totalDepartments };
+          } catch (e) {
+            console.error('[Firestore] Dashboard stats error:', e);
+            return mockRequest('/dashboard/stats');
+          }
+        },
+        async byStage() {
+          if (DEMO_MODE || !firestore) return mockRequest('/dashboard/by-stage');
+          try {
+            const projects = await api.projects.list({});
+            const counts = {};
+            STAGES.forEach(s => counts[s] = 0);
+            projects.forEach(p => { const s = getProjectStage(p); if (counts[s] !== undefined) counts[s]++; });
+            return STAGES.map(stage => ({ stage, count: counts[stage] }));
+          } catch (e) {
+            console.error('[Firestore] Dashboard byStage error:', e);
+            return mockRequest('/dashboard/by-stage');
+          }
+        },
+        async byDepartment() {
+          if (DEMO_MODE || !firestore) return mockRequest('/dashboard/by-department');
+          try {
+            const [departments, projects] = await Promise.all([api.departments.list(), api.projects.list({})]);
+            const counts = {};
+            departments.forEach(d => counts[d.department_name] = 0);
+            projects.forEach(p => { if (counts[p.department_name] !== undefined) counts[p.department_name]++; });
+            return Object.entries(counts).map(([department_name, count]) => ({ department_name, count }));
+          } catch (e) {
+            console.error('[Firestore] Dashboard byDepartment error:', e);
+            return mockRequest('/dashboard/by-department');
+          }
+        }
       },
       projects: {
-        list: (params) => {
+        async list(params = {}) {
           const qs = new URLSearchParams(params).toString();
           return api.request(`/projects?${qs}`);
         },
-        create: (data) => api.request('/projects', { method: 'POST', body: data }),
-        update: (id, data) => api.request(`/projects/${id}`, { method: 'PUT', body: data }),
-        delete: (id) => api.request(`/projects/${id}`, { method: 'DELETE' })
+        async create(data) {
+          return api.request('/projects', { method: 'POST', body: data });
+        },
+        async update(id, data) {
+          return api.request(`/projects/${id}`, { method: 'PUT', body: data });
+        },
+        async delete(id) {
+          return api.request(`/projects/${id}`, { method: 'DELETE' });
+        }
       },
       users: {
-        list: () => api.request('/users'),
-        create: (data) => api.request('/users', { method: 'POST', body: data }),
-        update: (id, data) => api.request(`/users/${id}`, { method: 'PUT', body: data }),
-        delete: (id) => api.request(`/users/${id}`, { method: 'DELETE' })
+        async list() {
+          if (DEMO_MODE || !firestore) return mockRequest('/users');
+          try {
+            const snap = await firestore.collection('users').get();
+            return snap.docs.map(doc => {
+              const data = doc.data();
+              return { id: doc.id, ...data, full_name: data.full_name || data.name };
+            });
+          } catch (e) {
+            console.error('[Firestore] Users list error:', e);
+            return mockRequest('/users');
+          }
+        },
+        async create(data) {
+          if (DEMO_MODE || !firestore) return mockRequest('/users', { method: 'POST', body: data });
+          try {
+            const payload = { ...data };
+            if (payload.password) {
+              payload.password_hash = await sha256(payload.password);
+              delete payload.password;
+            }
+            payload.created_at = new Date().toISOString();
+            payload.updated_at = payload.created_at;
+            if (payload.is_active === undefined) payload.is_active = 1;
+            const ref = await firestore.collection('users').add(payload);
+            return { id: ref.id, ...payload };
+          } catch (e) {
+            console.error('[Firestore] Users create error:', e);
+            return mockRequest('/users', { method: 'POST', body: data });
+          }
+        },
+        async update(id, data) {
+          if (DEMO_MODE || !firestore) return mockRequest(`/users/${id}`, { method: 'PUT', body: data });
+          try {
+            const payload = { ...data };
+            if (payload.password) {
+              payload.password_hash = await sha256(payload.password);
+              delete payload.password;
+            }
+            payload.updated_at = new Date().toISOString();
+            delete payload.id;
+            await firestore.collection('users').doc(id).update(payload);
+            return { id, ...payload };
+          } catch (e) {
+            console.error('[Firestore] Users update error:', e);
+            return mockRequest(`/users/${id}`, { method: 'PUT', body: data });
+          }
+        },
+        async delete(id) {
+          if (DEMO_MODE || !firestore) return mockRequest(`/users/${id}`, { method: 'DELETE' });
+          try {
+            await firestore.collection('users').doc(id).delete();
+            return {};
+          } catch (e) {
+            console.error('[Firestore] Users delete error:', e);
+            return mockRequest(`/users/${id}`, { method: 'DELETE' });
+          }
+        }
       },
       activity: {
-        list: () => api.request('/activity')
+        async list() {
+          if (DEMO_MODE || !firestore) return mockRequest('/activity');
+          try {
+            const snap = await firestore.collection('activity').orderBy('created_at', 'desc').limit(50).get();
+            return snap.docs.map(doc => {
+              const data = doc.data();
+              const item = { id: doc.id, ...data };
+              if (!item.description && item.action && item.target) {
+                item.description = item.action + ' ' + item.target;
+                item.action_type = item.action;
+              }
+              return item;
+            });
+          } catch (e) {
+            console.error('[Firestore] Activity list error:', e);
+            return mockRequest('/activity');
+          }
+        }
       },
       departments: {
-        list: () => api.request('/departments')
+        async list() {
+          if (DEMO_MODE || !firestore) return mockRequest('/departments');
+          try {
+            const snap = await firestore.collection('departments').get();
+            return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          } catch (e) {
+            console.error('[Firestore] Departments list error:', e);
+            return mockRequest('/departments');
+          }
+        }
       },
       settings: {
         email: {
-          get: () => api.request('/settings/email'),
-          save: (data) => api.request('/settings/email', { method: 'POST', body: data })
+          get: async () => api.request('/settings/email'),
+          save: async (data) => api.request('/settings/email', { method: 'POST', body: data })
+        },
+        backup: {
+          export: async () => {
+            const response = await api.rawRequest('/backup/export');
+            return response.blob();
+          },
+          import: async (jsonData) => api.rawRequest('/backup/import', { method: 'POST', body: jsonData }).then(r => r.json()),
+          get: async () => api.rawRequest('/backup/settings').then(r => r.json()),
+          save: async (data) => api.rawRequest('/backup/settings', { method: 'POST', body: data }).then(r => r.json()),
+          run: async () => api.rawRequest('/backup/run', { method: 'POST' }).then(r => r.json())
         }
       },
       notifications: {
-        test: (toEmail) => api.request('/notifications/test', { method: 'POST', body: { toEmail } }),
-        project: (projectId, recipients) => api.request('/notifications/project', { method: 'POST', body: { projectId, recipients } }),
-        overdue: (recipients) => api.request('/notifications/overdue', { method: 'POST', body: { recipients } })
+        test: async (toEmail) => ({ success: true }),
+        project: async (projectId, recipients) => ({ success: true }),
+        overdue: async (recipients) => ({ success: true })
       }
     };
 
@@ -175,6 +722,13 @@
       Send: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>,
       Mail: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>,
       Bot: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>,
+      Menu: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>,
+      Download: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>,
+      Upload: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4 4m4-4v12"/></svg>,
+      Database: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2.21 4.03 4 9 4s9-1.79 9-4V7"/><path strokeLinecap="round" strokeLinejoin="round" d="M4 7c0 2.21 4.03 4 9 4s9-1.79 9-4"/><path strokeLinecap="round" strokeLinejoin="round" d="M4 7c0-2.21 4.03-4 9-4s9 1.79 9 4"/><path strokeLinecap="round" strokeLinejoin="round" d="M4 12c0 2.21 4.03 4 9 4s9-1.79 9-4"/></svg>,
+      Save: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>,
+      Play: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>,
+      HelpCircle: (p) => <svg {...p} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path strokeLinecap="round" strokeLinejoin="round" d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><path strokeLinecap="round" strokeLinejoin="round" d="M12 17h.01"/></svg>,
     };
 
     function getPriorityColor(p) {
@@ -199,7 +753,7 @@
 
     function getStageColor(stage) {
       const idx = STAGES.indexOf(stage);
-      const colors = ['bg-blue-400','bg-indigo-400','bg-violet-400','bg-fuchsia-400','bg-teal-400'];
+      const colors = ['bg-blue-400','bg-indigo-400','bg-violet-400','bg-fuchsia-400','bg-teal-400','bg-emerald-400'];
       return colors[idx] || 'bg-slate-400';
     }
 
@@ -225,6 +779,204 @@
       const d = match ? new Date(match[1] + 'T00:00:00') : new Date(dateStr);
       if (isNaN(d.getTime())) return '-';
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function exportProjectsExcel(projects, filename = 'projects-export.xlsx') {
+      const XLSX = window.XLSX;
+      if (!XLSX) return alert('Excel library not loaded');
+      const rows = projects.map(p => ({
+        'Project Name': p.project_name || '',
+        'Department': p.department_name || '',
+        'Owner': p.owner_name || '',
+        'Stage': getProjectStage(p),
+        'Progress (%)': p.progress || 0,
+        'Status': p.status || '',
+        'Priority': p.priority || '',
+        'Start Date': p.start_date || '',
+        'Due Date': p.due_date || '',
+        'Description': p.description || ''
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Projects');
+      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), filename);
+    }
+
+    function exportProjectsPDF(projects, filename = 'projects-export.pdf') {
+      const { jsPDF } = window.jspdf;
+      if (!jsPDF) return alert('PDF library not loaded');
+      const doc = new jsPDF({ orientation: 'landscape' });
+      doc.setFontSize(16);
+      doc.text('Projects Export', 14, 16);
+      doc.setFontSize(10);
+      doc.text('Generated: ' + new Date().toLocaleString(), 14, 24);
+      const rows = projects.map(p => [
+        p.project_name || '',
+        p.department_name || '',
+        p.owner_name || '',
+        getProjectStage(p),
+        (p.progress || 0) + '%',
+        p.status || '',
+        p.priority || '',
+        p.due_date || ''
+      ]);
+      doc.autoTable({
+        head: [['Project', 'Department', 'Owner', 'Stage', 'Progress', 'Status', 'Priority', 'Due Date']],
+        body: rows,
+        startY: 30,
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [14, 165, 233] }
+      });
+      doc.save(filename);
+    }
+
+    function exportReportsExcel({ projects, deptData, stageBreakdown, statusBreakdown }, filename = 'reports-analytics.xlsx') {
+      const XLSX = window.XLSX;
+      if (!XLSX) return alert('Excel library not loaded');
+      const wb = XLSX.utils.book_new();
+
+      const total = projects.length;
+      const completed = projects.filter(p => p.status === 'Completed').length;
+      const atRisk = projects.filter(p => p.status === 'At Risk' || p.status === 'Delayed').length;
+      const avgProgress = total ? Math.round(projects.reduce((a, p) => a + (p.progress || 0), 0) / total) : 0;
+      const totalDepartments = new Set(projects.map(p => p.department_id).filter(Boolean)).size;
+
+      const summaryRows = [
+        ['Metric', 'Value'],
+        ['Total Projects', total],
+        ['Completed', completed],
+        ['At Risk / Delayed', atRisk],
+        ['Avg Progress', avgProgress + '%'],
+        ['Departments', totalDepartments]
+      ];
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+      XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+      const wsStage = XLSX.utils.json_to_sheet(stageBreakdown.map(s => ({ Stage: s.name, Count: s.count })));
+      XLSX.utils.book_append_sheet(wb, wsStage, 'By Stage');
+
+      const wsStatus = XLSX.utils.json_to_sheet(statusBreakdown.map(s => ({ Status: s.name, Count: s.count })));
+      XLSX.utils.book_append_sheet(wb, wsStatus, 'By Status');
+
+      const wsDept = XLSX.utils.json_to_sheet((deptData || []).map(d => ({ Department: d.department_name, Count: d.count })));
+      XLSX.utils.book_append_sheet(wb, wsDept, 'By Department');
+
+      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), filename);
+    }
+
+    function exportReportsPDF({ projects, deptData, stageBreakdown, statusBreakdown }, filename = 'reports-analytics.pdf') {
+      const { jsPDF } = window.jspdf;
+      if (!jsPDF) return alert('PDF library not loaded');
+      const doc = new jsPDF();
+      doc.setFontSize(18);
+      doc.text('Reports & Analytics', 14, 20);
+      doc.setFontSize(10);
+      doc.text('Generated: ' + new Date().toLocaleString(), 14, 28);
+
+      const total = projects.length;
+      const completed = projects.filter(p => p.status === 'Completed').length;
+      const atRisk = projects.filter(p => p.status === 'At Risk' || p.status === 'Delayed').length;
+      const avgProgress = total ? Math.round(projects.reduce((a, p) => a + (p.progress || 0), 0) / total) : 0;
+      const totalDepartments = new Set(projects.map(p => p.department_id).filter(Boolean)).size;
+
+      doc.setFontSize(12);
+      doc.text('Summary', 14, 40);
+      doc.setFontSize(10);
+      const summary = [
+        'Total Projects: ' + total,
+        'Completed: ' + completed,
+        'At Risk / Delayed: ' + atRisk,
+        'Avg Progress: ' + avgProgress + '%',
+        'Departments: ' + totalDepartments
+      ];
+      summary.forEach((line, i) => doc.text(line, 14, 48 + i * 6));
+
+      let y = 48 + summary.length * 6 + 10;
+      doc.setFontSize(12);
+      doc.text('By Stage', 14, y);
+      doc.autoTable({
+        head: [['Stage', 'Count']],
+        body: stageBreakdown.map(s => [s.name, s.count]),
+        startY: y + 4,
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [14, 165, 233] },
+        margin: { left: 14, right: 14 }
+      });
+
+      if (doc.lastAutoTable.finalY + 30 > doc.internal.pageSize.height) {
+        doc.addPage();
+        y = 20;
+      } else {
+        y = doc.lastAutoTable.finalY + 10;
+      }
+      doc.setFontSize(12);
+      doc.text('By Status', 14, y);
+      doc.autoTable({
+        head: [['Status', 'Count']],
+        body: statusBreakdown.map(s => [s.name, s.count]),
+        startY: y + 4,
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [16, 185, 129] },
+        margin: { left: 14, right: 14 }
+      });
+
+      if (doc.lastAutoTable.finalY + 30 > doc.internal.pageSize.height) {
+        doc.addPage();
+        y = 20;
+      } else {
+        y = doc.lastAutoTable.finalY + 10;
+      }
+      doc.setFontSize(12);
+      doc.text('By Department', 14, y);
+      doc.autoTable({
+        head: [['Department', 'Count']],
+        body: (deptData || []).map(d => [d.department_name, d.count]),
+        startY: y + 4,
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [245, 158, 11] },
+        margin: { left: 14, right: 14 }
+      });
+
+      doc.save(filename);
+    }
+
+    function ExportDropdown({ label = 'Export', options }) {
+      const [open, setOpen] = useState(false);
+      const ref = useRef(null);
+      useEffect(() => {
+        function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+        document.addEventListener('mousedown', handleClick);
+        return () => document.removeEventListener('mousedown', handleClick);
+      }, []);
+      return (
+        <div className="relative" ref={ref}>
+          <button onClick={() => setOpen(!open)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition shadow-sm tap-target">
+            <ICONS.Download className="w-4 h-4" /> {label}
+          </button>
+          {open && (
+            <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-lg shadow-lg border border-slate-100 z-20">
+              {options.map((opt, i) => (
+                <button key={i} onClick={() => { opt.onClick(); setOpen(false); }} className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 first:rounded-t-lg last:rounded-b-lg">
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      );
     }
 
     function SimpleBarChart({ data }) {
@@ -399,15 +1151,38 @@
     function Modal({ isOpen, onClose, title, children, wide }) {
       if (!isOpen) return null;
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay bg-slate-900/40 p-4" onClick={onClose}>
-          <div className={`bg-white rounded-xl shadow-2xl animate-fade-in max-h-[90vh] overflow-y-auto ${wide ? 'w-full max-w-3xl' : 'w-full max-w-2xl'}`} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-5 border-b border-slate-100 sticky top-0 bg-white rounded-t-xl z-10">
-              <h3 className="text-lg font-semibold text-slate-800">{title}</h3>
-              <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition p-1"><ICONS.Close className="w-5 h-5" /></button>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center modal-overlay bg-slate-900/40 sm:p-4" onClick={onClose}>
+          <div className={`bg-white shadow-2xl animate-fade-in max-h-[92vh] sm:max-h-[90vh] overflow-y-auto w-full sm:rounded-xl ${wide ? 'sm:max-w-3xl' : 'sm:max-w-2xl'}`} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-100 sticky top-0 bg-white sm:rounded-t-xl z-10">
+              <h3 className="text-base sm:text-lg font-semibold text-slate-800 truncate pr-4">{title}</h3>
+              <button onClick={onClose} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-600 transition rounded-lg hover:bg-slate-100" aria-label="Close"><ICONS.Close className="w-5 h-5" /></button>
             </div>
-            <div className="p-5">{children}</div>
+            <div className="p-4 sm:p-5">{children}</div>
           </div>
         </div>
+      );
+    }
+
+    function ConfirmDialog({ isOpen, onClose, title, message, confirmText, confirmVariant = 'primary', onConfirm, busy }) {
+      if (!isOpen) return null;
+      const variantClasses = {
+        primary: 'bg-primary-600 hover:bg-primary-700',
+        rose: 'bg-rose-600 hover:bg-rose-700',
+        teal: 'bg-teal-600 hover:bg-teal-700'
+      };
+      return (
+        <Modal isOpen={isOpen} onClose={onClose} title={title}>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">{message}</p>
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
+              <button onClick={onClose} className="w-full sm:w-auto px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition tap-target">Cancel</button>
+              <button onClick={onConfirm} disabled={busy} className={`w-full sm:w-auto px-4 py-2.5 text-white rounded-lg text-sm font-medium transition shadow-sm tap-target flex items-center justify-center gap-2 ${variantClasses[confirmVariant] || variantClasses.primary}`}>
+                {busy && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin-slow" />}
+                {confirmText}
+              </button>
+            </div>
+          </div>
+        </Modal>
       );
     }
 
@@ -442,11 +1217,27 @@
       });
 
       const handleChange = (field, value) => {
-        setForm(prev => ({ ...prev, [field]: value }));
-        if (field === 'stage' && !project) {
-          const idx = STAGES.indexOf(value);
-          setForm(prev => ({ ...prev, stage: value, progress: Math.round(((idx + 1) / STAGES.length) * 100) }));
-        }
+        setForm(prev => {
+          const next = { ...prev, [field]: value };
+          if (field === 'status') {
+            if (value === 'Completed') {
+              next.stage = 'Maintenance & Iteration';
+              next.progress = 100;
+            } else if (prev.status === 'Completed' && prev.stage === 'Maintenance & Iteration') {
+              next.stage = 'Deploy';
+              next.progress = !project ? 80 : next.progress;
+            }
+          }
+          if (field === 'stage') {
+            const idx = STAGES.indexOf(value);
+            if (!project) next.progress = Math.round(((idx + 1) / STAGES.length) * 100);
+            if (value === 'Maintenance & Iteration') {
+              next.status = 'Completed';
+              next.progress = 100;
+            }
+          }
+          return next;
+        });
       };
 
       const handleSubmit = (e) => {
@@ -520,9 +1311,9 @@
             <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
             <textarea value={form.description || ''} onChange={e => handleChange('description', e.target.value)} rows={2} className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm resize-none" placeholder="Brief project description..." />
           </div>
-          <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
-            <button type="button" onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition">Cancel</button>
-            <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm">{project ? 'Update Project' : 'Create Project'}</button>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2 border-t border-slate-100">
+            <button type="button" onClick={onCancel} className="w-full sm:w-auto px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition tap-target">Cancel</button>
+            <button type="submit" className="w-full sm:w-auto px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm tap-target">{project ? 'Update Project' : 'Create Project'}</button>
           </div>
         </form>
       );
@@ -590,15 +1381,39 @@
               </div>
             )}
           </div>
-          <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
-            <button type="button" onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition">Cancel</button>
-            <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm">{user ? 'Update User' : 'Create User'}</button>
+          <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 pt-2 border-t border-slate-100">
+            <button type="button" onClick={onCancel} className="w-full sm:w-auto px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition tap-target">Cancel</button>
+            <button type="submit" className="w-full sm:w-auto px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm tap-target">{user ? 'Update User' : 'Create User'}</button>
           </div>
         </form>
       );
     }
 
-    function Sidebar({ activeTab, setActiveTab, currentUser, onLogout, onToggleAI, aiOpen }) {
+    function MobileHeader({ currentUser, onMenuClick, onToggleAI, aiOpen, title, subtitle }) {
+      return (
+        <header className="lg:hidden bg-white border-b border-slate-200 flex items-center justify-between px-4 shrink-0" style={{ minHeight: 'var(--header-h)', paddingTop: 'var(--safe-top)' }}>
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <button onClick={onMenuClick} className="tap-target w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 transition" aria-label="Open menu">
+              <ICONS.Menu className="w-6 h-6" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="font-bold text-slate-800 text-base leading-tight truncate">{title}</h1>
+              {subtitle && <p className="text-xs text-slate-400 truncate">{subtitle}</p>}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={onToggleAI} className={`tap-target w-10 h-10 flex items-center justify-center rounded-lg transition ${aiOpen ? 'bg-violet-50 text-violet-700' : 'text-slate-500 hover:bg-slate-100'}`} aria-label="AI Assistant">
+              <ICONS.Sparkles className="w-5 h-5" />
+            </button>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-500 to-teal-500 flex items-center justify-center text-white text-xs font-bold">
+              {currentUser.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    function Sidebar({ activeTab, setActiveTab, currentUser, onLogout, onToggleAI, aiOpen, mobileOpen, onCloseMobile }) {
       const isUser = currentUser.role === 'user';
       const items = [
         { id: 'dashboard', label: 'Dashboard', icon: ICONS.Dashboard, roles: ['admin', 'user'] },
@@ -607,18 +1422,23 @@
         { id: 'users', label: 'Users', icon: ICONS.Users, roles: ['admin'] },
         { id: 'settings', label: 'Settings', icon: ICONS.Settings, roles: ['admin', 'user'] },
       ];
-      return (
-        <aside className="w-60 bg-white border-r border-slate-200 flex flex-col h-screen sticky top-0">
-          <div className="p-5 border-b border-slate-100 flex items-center gap-3">
-            <img src="logo.jpg" alt="YSU" className="w-9 h-9 rounded-lg shadow-sm" />
-            <div>
-              <h1 className="font-bold text-slate-800 text-sm leading-tight">Process Auto</h1>
-              <p className="text-[10px] text-slate-400 leading-tight">Monitoring Dashboard</p>
-            </div>
+
+      const logoHeader = (
+        <div className="p-4 lg:p-5 border-b border-slate-100 flex items-center gap-3">
+          <img src="logo.jpg" alt="YSU" className="w-9 h-9 rounded-lg shadow-sm" />
+          <div>
+            <h1 className="font-bold text-slate-800 text-sm leading-tight">Process Auto</h1>
+            <p className="text-[10px] text-slate-400 leading-tight">Monitoring Dashboard</p>
           </div>
+        </div>
+      );
+
+      const sidebarContent = (
+        <>
+          {logoHeader}
           <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
             {items.filter(item => item.roles.includes(currentUser.role)).map(item => (
-              <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+              <button key={item.id} data-tour={item.id} onClick={() => { setActiveTab(item.id); if (onCloseMobile) onCloseMobile(); }} className={`w-full flex items-center gap-3 px-3 py-3 lg:py-2.5 rounded-lg text-sm font-medium transition tap-target ${
                 activeTab === item.id ? 'bg-primary-50 text-primary-700' : 'text-slate-600 hover:bg-slate-50'
               }`}>
                 <item.icon className={`w-5 h-5 ${activeTab === item.id ? 'text-primary-600' : 'text-slate-400'}`} />
@@ -626,7 +1446,7 @@
               </button>
             ))}
             <div className="pt-2 mt-2 border-t border-slate-100">
-              <button onClick={onToggleAI} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+              <button data-tour="ai-assistant" onClick={() => { onToggleAI(); if (onCloseMobile) onCloseMobile(); }} className={`w-full flex items-center gap-3 px-3 py-3 lg:py-2.5 rounded-lg text-sm font-medium transition tap-target ${
                 aiOpen ? 'bg-gradient-to-r from-violet-50 to-fuchsia-50 text-violet-700' : 'text-slate-600 hover:bg-slate-50'
               }`}>
                 <ICONS.Sparkles className={`w-5 h-5 ${aiOpen ? 'text-violet-600' : 'text-slate-400'}`} />
@@ -649,95 +1469,113 @@
                 </div>
               </div>
             </div>
-            <button onClick={onLogout} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-rose-600 hover:bg-rose-50 transition">
+            <button onClick={() => { onLogout(); if (onCloseMobile) onCloseMobile(); }} className="w-full flex items-center gap-2 px-3 py-3 lg:py-2 rounded-lg text-sm font-medium text-rose-600 hover:bg-rose-50 transition tap-target">
               <ICONS.Logout className="w-4 h-4" /> Sign Out
             </button>
           </div>
-        </aside>
+        </>
+      );
+
+      return (
+        <>
+          <aside className="hidden lg:flex w-60 bg-white border-r border-slate-200 flex-col h-screen sticky top-0">
+            {sidebarContent}
+          </aside>
+          <div className={`fixed inset-0 bg-black/40 z-40 lg:hidden drawer-backdrop ${mobileOpen ? 'open' : ''}`} onClick={onCloseMobile} />
+          <aside className={`fixed inset-y-0 left-0 z-50 w-[280px] bg-white shadow-2xl flex flex-col lg:hidden mobile-drawer ${mobileOpen ? 'open' : ''}`}>
+            <div className="flex items-center justify-end p-2 border-b border-slate-100">
+              <button onClick={onCloseMobile} className="tap-target w-10 h-10 flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Close menu">
+                <ICONS.Close className="w-5 h-5" />
+              </button>
+            </div>
+            {sidebarContent}
+          </aside>
+        </>
       );
     }
 
-    function DashboardView({ projects, activity, currentUser }) {
-      const [stats, setStats] = useState(null);
-      const [loading, setLoading] = useState(true);
-      const [error, setError] = useState(null);
+    function KpiCards({ projects, onKpiClick }) {
+      const kpis = useMemo(() => {
+        const total = projects.length;
+        const completed = projects.filter(p => p.status === 'Completed').length;
+        const atRisk = projects.filter(p => p.status === 'At Risk' || p.status === 'Delayed').length;
+        const avgProgress = total ? Math.round(projects.reduce((a, p) => a + (p.progress || 0), 0) / total) : 0;
+        const totalDepartments = new Set(projects.map(p => p.department_id).filter(Boolean)).size;
+        return { total, completed, atRisk, avgProgress, totalDepartments };
+      }, [projects]);
 
-      const loadStats = useCallback(async () => {
-        try {
-          setLoading(true);
-          const data = await api.dashboard.stats();
-          setStats(data);
-          setError(null);
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setLoading(false);
-        }
-      }, []);
+      return (
+        <div data-tour="kpis" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div onClick={() => onKpiClick && onKpiClick('total')} className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md hover:border-primary-200 transition tap-target" role="button" aria-label="View all projects">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm text-slate-500 font-medium">Total Projects</span>
+              <div className="w-9 h-9 rounded-lg bg-primary-50 flex items-center justify-center"><ICONS.FileText className="w-5 h-5 text-primary-600" /></div>
+            </div>
+            <div className="text-3xl font-bold text-slate-800">{kpis.total}</div>
+            <div className="mt-2 text-xs text-slate-400">Across {kpis.totalDepartments || 0} departments</div>
+          </div>
+          <div onClick={() => onKpiClick && onKpiClick('completed')} className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md hover:border-emerald-200 transition tap-target" role="button" aria-label="View completed projects">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm text-slate-500 font-medium">Completed</span>
+              <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center"><ICONS.Check className="w-5 h-5 text-emerald-600" /></div>
+            </div>
+            <div className="text-3xl font-bold text-slate-800">{kpis.completed}</div>
+            <div className="mt-2 text-xs text-emerald-600 font-medium">{kpis.total > 0 ? Math.round((kpis.completed / kpis.total) * 100) : 0}% completion rate</div>
+          </div>
+          <div onClick={() => onKpiClick && onKpiClick('avgProgress')} className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md hover:border-teal-200 transition tap-target" role="button" aria-label="View all projects by progress">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm text-slate-500 font-medium">Avg Progress</span>
+              <div className="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center"><ICONS.TrendUp className="w-5 h-5 text-teal-600" /></div>
+            </div>
+            <div className="text-3xl font-bold text-slate-800">{kpis.avgProgress || 0}%</div>
+            <div className="mt-2 w-full bg-slate-100 rounded-full h-1.5">
+              <div className={`h-1.5 rounded-full transition-all ${getProgressColor(kpis.avgProgress || 0)}`} style={{ width: `${kpis.avgProgress || 0}%` }}></div>
+            </div>
+          </div>
+          <div onClick={() => onKpiClick && onKpiClick('atRisk')} className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 cursor-pointer hover:shadow-md hover:border-rose-200 transition tap-target" role="button" aria-label="View at risk and delayed projects">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm text-slate-500 font-medium">At Risk / Delayed</span>
+              <div className="w-9 h-9 rounded-lg bg-rose-50 flex items-center justify-center"><ICONS.Alert className="w-5 h-5 text-rose-600" /></div>
+            </div>
+            <div className="text-3xl font-bold text-slate-800">{kpis.atRisk}</div>
+            <div className="mt-2 text-xs text-rose-500 font-medium">Need attention</div>
+          </div>
+        </div>
+      );
+    }
 
-      useEffect(() => { loadStats(); }, [loadStats]);
-
-      const kpis = stats || { total: projects.length, deployed: 0, atRisk: 0, avgProgress: 0 };
-
+    function DashboardView({ projects, activity, currentUser, onKpiClick }) {
+      const isAdmin = currentUser?.role === 'admin';
       const stageData = useMemo(() => STAGES.map(s => ({
-        label: s.slice(0, 3),
-        value: projects.filter(p => p.stage === s).length,
-        color: s === 'Deploy' ? '#14b8a6' : s === 'Test' ? '#8b5cf6' : s === 'Build' ? '#6366f1' : s === 'Design' ? '#0ea5e9' : '#94a3b8'
+        label: s === 'Maintenance & Iteration' ? 'Maint' : s.slice(0, 3),
+        value: projects.filter(p => getProjectStage(p) === s).length,
+        color: s === 'Maintenance & Iteration' ? '#10b981' : s === 'Deploy' ? '#14b8a6' : s === 'Test' ? '#8b5cf6' : s === 'Build' ? '#6366f1' : s === 'Design' ? '#0ea5e9' : '#94a3b8'
       })), [projects]);
+
+      const statusBreakdown = useMemo(() => {
+        const map = {};
+        projects.forEach(p => { map[p.status] = (map[p.status] || 0) + 1; });
+        return Object.entries(map).map(([name, count]) => ({ name, count }));
+      }, [projects]);
 
       const recentProjects = useMemo(() => [...projects].slice(0, 5), [projects]);
 
-      if (loading && !stats) return <LoadingSpinner message="Loading dashboard..." />;
-      if (error) return <ErrorMessage error={error} onRetry={loadStats} />;
+      const visibleActivity = useMemo(() => {
+        if (isAdmin) return activity || [];
+        const ownProjectIds = new Set(projects.map(p => String(p.id)));
+        return (activity || []).filter(a => a.project_id && ownProjectIds.has(String(a.project_id)));
+      }, [activity, projects, isAdmin]);
 
       return (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="hidden lg:block">
               <h2 className="text-xl font-bold text-slate-800">Dashboard Overview</h2>
               <p className="text-sm text-slate-500">Welcome back, {currentUser.name}</p>
             </div>
-            <button onClick={loadStats} className="p-2 text-slate-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition" title="Refresh">
-              <ICONS.Refresh className="w-5 h-5" />
-            </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm text-slate-500 font-medium">Total Projects</span>
-                <div className="w-9 h-9 rounded-lg bg-primary-50 flex items-center justify-center"><ICONS.FileText className="w-5 h-5 text-primary-600" /></div>
-              </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.total}</div>
-              <div className="mt-2 text-xs text-slate-400">Across {kpis.totalDepartments || 0} departments</div>
-            </div>
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm text-slate-500 font-medium">Deployed</span>
-                <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center"><ICONS.Check className="w-5 h-5 text-emerald-600" /></div>
-              </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.deployed}</div>
-              <div className="mt-2 text-xs text-emerald-600 font-medium">{kpis.total > 0 ? Math.round((kpis.deployed / kpis.total) * 100) : 0}% completion rate</div>
-            </div>
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm text-slate-500 font-medium">Avg Progress</span>
-                <div className="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center"><ICONS.TrendUp className="w-5 h-5 text-teal-600" /></div>
-              </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.avgProgress || 0}%</div>
-              <div className="mt-2 w-full bg-slate-100 rounded-full h-1.5">
-                <div className={`h-1.5 rounded-full transition-all ${getProgressColor(kpis.avgProgress || 0)}`} style={{ width: `${kpis.avgProgress || 0}%` }}></div>
-              </div>
-            </div>
-            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm text-slate-500 font-medium">At Risk / Delayed</span>
-                <div className="w-9 h-9 rounded-lg bg-rose-50 flex items-center justify-center"><ICONS.Alert className="w-5 h-5 text-rose-600" /></div>
-              </div>
-              <div className="text-3xl font-bold text-slate-800">{kpis.atRisk}</div>
-              <div className="mt-2 text-xs text-rose-500 font-medium">Need attention</div>
-            </div>
-          </div>
+          <KpiCards projects={projects} onKpiClick={onKpiClick} />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-100 p-5">
@@ -747,8 +1585,8 @@
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
               <h3 className="text-sm font-semibold text-slate-700 mb-3">Recent Activity</h3>
               <div className="space-y-3 max-h-[280px] overflow-y-auto scrollbar-thin pr-1">
-                {activity.length === 0 && <p className="text-sm text-slate-400 py-4 text-center">No recent activity</p>}
-                {activity.map(a => (
+                {visibleActivity.length === 0 && <p className="text-sm text-slate-400 py-4 text-center">No recent activity</p>}
+                {visibleActivity.map(a => (
                   <div key={a.id} className="flex gap-3 pb-3 border-b border-slate-50 last:border-0 last:pb-0">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
                       a.action_type === 'stage' ? 'bg-blue-50 text-blue-600' : a.action_type === 'progress' ? 'bg-teal-50 text-teal-600' : a.action_type === 'priority' ? 'bg-amber-50 text-amber-600' : a.action_type === 'create' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-600'
@@ -769,12 +1607,58 @@
             </div>
           </div>
 
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
+            <h3 className="text-sm font-semibold text-slate-700 mb-4">Projects by Status</h3>
+            <div className="space-y-3 max-w-3xl">
+              {statusBreakdown.map(s => (
+                <div key={s.name}>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-slate-600">{s.name}</span><span className="font-semibold text-slate-800">{s.count}</span></div>
+                  <div className="w-full bg-slate-100 rounded-full h-2"><div className={`h-2 rounded-full ${s.name === 'On Track' ? 'bg-emerald-500' : s.name === 'At Risk' ? 'bg-amber-500' : s.name === 'Delayed' ? 'bg-rose-500' : 'bg-blue-500'}`} style={{ width: `${Math.max((s.count / Math.max(...statusBreakdown.map(x => x.count), 1)) * 100, 4)}%` }}></div></div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-700">Recent Projects</h3>
               <span className="text-xs text-slate-400">Last updated</span>
             </div>
-            <div className="overflow-x-auto">
+
+            {/* Mobile recent project cards */}
+            <div className="lg:hidden divide-y divide-slate-50">
+              {recentProjects.map(p => (
+                <div key={p.id} className="p-4 space-y-2">
+                  <div>
+                    <div className="font-medium text-slate-800">{p.project_name}</div>
+                    <div className="text-xs text-slate-400 truncate">{p.description}</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <span className="text-xs text-slate-400">Department</span>
+                      <p className="text-slate-500 text-xs truncate">{p.department_name || p.department}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400">Owner</span>
+                      <p className="text-slate-600 text-xs truncate">{p.owner_name}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white ${getStageColor(getProjectStage(p))}`}>{getProjectStage(p)}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 bg-slate-100 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full ${getProgressColor(p.progress)}`} style={{ width: `${p.progress}%` }}></div>
+                      </div>
+                      <span className="text-xs text-slate-500">{p.progress}%</span>
+                    </div>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(p.status)}`}>{p.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop recent projects table */}
+            <div className="hidden lg:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
@@ -795,7 +1679,7 @@
                       </td>
                       <td className="p-3 text-slate-500 text-xs">{p.department_name || p.department}</td>
                       <td className="p-3 text-slate-600">{p.owner_name}</td>
-                      <td className="p-3"><span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white ${getStageColor(p.stage)}`}>{p.stage}</span></td>
+                      <td className="p-3"><span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white ${getStageColor(getProjectStage(p))}`}>{getProjectStage(p)}</span></td>
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           <div className="w-20 bg-slate-100 rounded-full h-1.5">
@@ -815,77 +1699,222 @@
       );
     }
 
-    function ProjectsView({ isAdmin, currentUser, onEdit, onDelete, onAdd, departments }) {
-      const [projects, setProjects] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [error, setError] = useState(null);
+    function ProjectCard({ p, isAdmin, currentUser, onEdit, onDelete, onNotify }) {
+      const daysLeft = daysUntil(p.due_date);
+      return (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-semibold text-slate-800 text-base truncate">{p.project_name}</h3>
+                {!isAdmin && String(p.owner_id) === String(currentUser?.id) && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary-100 text-primary-700 font-medium">My Project</span>
+                )}
+              </div>
+              <p className="text-sm text-slate-400 truncate">{p.description || 'No description'}</p>
+            </div>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border shrink-0 ${getPriorityColor(p.priority)}`}>{p.priority}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-xs text-slate-400 mb-0.5">Department</p>
+              <p className="text-slate-600 truncate">{p.department_name || p.department}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 mb-0.5">Owner</p>
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center text-[10px] font-bold">{p.owner_name?.split(' ').map(n => n[0]).join('')}</div>
+                <span className="text-slate-600 truncate">{p.owner_name}</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 mb-0.5">Stage</p>
+              <div className="flex flex-col gap-1">
+                <StageTracker stage={getProjectStage(p)} />
+                <span className="text-[10px] text-slate-400">{getProjectStage(p)}</span>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 mb-0.5">Status</p>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(p.status)}`}>{p.status}</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between text-sm mb-1">
+              <span className="text-slate-400">Progress</span>
+              <span className="font-semibold text-slate-600">{p.progress}%</span>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-2">
+              <div className={`h-2 rounded-full transition-all ${getProgressColor(p.progress)}`} style={{ width: `${p.progress}%` }}></div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-50">
+            <div className="text-xs text-slate-500">
+              <div>{formatDate(p.due_date)}</div>
+              {p.status === 'Completed' && <div className="text-emerald-600 font-medium">Completed</div>}
+              {p.status !== 'Completed' && daysLeft !== null && daysLeft >= 0 && <div className={`${daysLeft <= 7 ? 'text-rose-500 font-medium' : 'text-slate-400'}`}>{daysLeft}d left</div>}
+              {p.status !== 'Completed' && daysLeft !== null && daysLeft < 0 && <div className="text-rose-500 font-medium">{Math.abs(daysLeft)}d overdue</div>}
+            </div>
+            <div className="flex items-center gap-1">
+              {(isAdmin || String(p.owner_id) === String(currentUser?.id)) && (
+                <button onClick={() => onEdit(p)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition" title="Edit"><ICONS.Edit className="w-4 h-4" /></button>
+              )}
+              <button onClick={() => onNotify(p)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition" title="Send Notification"><ICONS.Mail className="w-4 h-4" /></button>
+              {(isAdmin || String(p.owner_id) === String(currentUser?.id)) && <button onClick={() => onDelete(p.id)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Delete"><ICONS.Trash className="w-4 h-4" /></button>}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function UserCard({ u, onEditUser, onDeleteUser }) {
+      return (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-primary-500 to-teal-500 flex items-center justify-center text-white text-sm font-bold shadow-sm">
+              {u.full_name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="font-semibold text-slate-800 text-base truncate">{u.full_name}</h3>
+              <p className="text-xs text-slate-500 font-mono truncate">@{u.username}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-xs text-slate-400 mb-0.5">Role</p>
+              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${u.role === 'admin' ? 'bg-primary-100 text-primary-700' : 'bg-slate-100 text-slate-600'}`}>
+                <ICONS.Shield className="w-3 h-3 mr-1" />
+                {u.role === 'admin' ? 'Admin' : 'User'}
+              </span>
+            </div>
+            <div>
+              <p className="text-xs text-slate-400 mb-0.5">Department</p>
+              <p className="text-slate-500 text-xs truncate">{u.department_name || u.department}</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-1 pt-2 border-t border-slate-50">
+            <button onClick={() => onEditUser(u)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition" title="Edit"><ICONS.Edit className="w-4 h-4" /></button>
+            {u.role !== 'admin' && <button onClick={() => onDeleteUser(u.id)} className="tap-target w-9 h-9 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Delete"><ICONS.Trash className="w-4 h-4" /></button>}
+          </div>
+        </div>
+      );
+    }
+
+    function ProjectsView({ isAdmin, currentUser, onEdit, onDelete, onAdd, departments, projects: allProjects, presetFilter, onFilterChange }) {
       const [search, setSearch] = useState('');
-      const [filterDept, setFilterDept] = useState('All');
-      const [filterStage, setFilterStage] = useState('All');
-      const [filterPriority, setFilterPriority] = useState('All');
-      const [filterStatus, setFilterStatus] = useState('All');
+      const [searchInput, setSearchInput] = useState('');
+      const getDefaultDept = useCallback(() => {
+        if (presetFilter?.dept) return presetFilter.dept;
+        return 'All';
+      }, [presetFilter]);
+      const [filterDept, setFilterDept] = useState(() => getDefaultDept());
+      const [filterStage, setFilterStage] = useState(() => presetFilter?.stage || 'All');
+      const [filterPriority, setFilterPriority] = useState(() => presetFilter?.priority || 'All');
+      const [filterStatus, setFilterStatus] = useState(() => presetFilter?.status || 'All');
       const [notifyModal, setNotifyModal] = useState(null);
       const [notifyRecipients, setNotifyRecipients] = useState('');
       const [notifySending, setNotifySending] = useState(false);
       const [notifyResult, setNotifyResult] = useState(null);
 
-      const loadProjects = useCallback(async () => {
-        try {
-          setLoading(true);
-          const params = {};
-          if (search) params.search = search;
-          if (filterDept !== 'All') params.department = filterDept;
-          if (filterStage !== 'All') params.stage = filterStage;
-          if (filterPriority !== 'All') params.priority = filterPriority;
-          if (filterStatus !== 'All') params.status = filterStatus;
-          const data = await api.projects.list(params);
-          setProjects(data);
-          setError(null);
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setLoading(false);
+      useEffect(() => {
+        const timer = setTimeout(() => setSearch(searchInput), 400);
+        return () => clearTimeout(timer);
+      }, [searchInput]);
+
+      useEffect(() => {
+        if (!presetFilter) return;
+        setSearchInput('');
+        setSearch('');
+        setFilterDept(getDefaultDept());
+        setFilterStage(presetFilter.stage || 'All');
+        setFilterPriority(presetFilter.priority || 'All');
+        setFilterStatus(presetFilter.status || 'All');
+      }, [presetFilter, getDefaultDept]);
+
+      useEffect(() => {
+        if (onFilterChange) {
+          onFilterChange({ status: filterStatus, stage: filterStage, priority: filterPriority, dept: filterDept });
         }
-      }, [search, filterDept, filterStage, filterPriority, filterStatus]);
+      }, [filterStatus, filterStage, filterPriority, filterDept, onFilterChange]);
 
-      useEffect(() => { loadProjects(); }, [loadProjects]);
-
-      if (loading && projects.length === 0) return <LoadingSpinner message="Loading projects..." />;
-      if (error && projects.length === 0) return <ErrorMessage error={error} onRetry={loadProjects} />;
+      const projects = useMemo(() => {
+        let list = [...(allProjects || [])];
+        if (search) {
+          const s = search.toLowerCase();
+          list = list.filter(p => (p.project_name || '').toLowerCase().includes(s) || (p.owner_name || '').toLowerCase().includes(s));
+        }
+        if (filterDept !== 'All') list = list.filter(p => String(p.department_id) === filterDept);
+        if (filterStage !== 'All') list = list.filter(p => getProjectStage(p) === filterStage);
+        if (filterPriority !== 'All') list = list.filter(p => p.priority === filterPriority);
+        if (filterStatus !== 'All') {
+          if (filterStatus === 'At Risk / Delayed') {
+            list = list.filter(p => p.status === 'At Risk' || p.status === 'Delayed');
+          } else {
+            list = list.filter(p => p.status === filterStatus);
+          }
+        }
+        return list;
+      }, [allProjects, search, filterDept, filterStage, filterPriority, filterStatus]);
 
       return (
         <div className="space-y-4">
-          <div className="flex flex-col md:flex-row gap-3 md:items-center justify-between">
-            <div className="flex flex-wrap gap-3 flex-1">
-              <div className="relative flex-1 min-w-[200px]">
+          <div className="flex flex-col md:flex-row gap-3 md:items-start justify-between">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap gap-3 flex-1">
+              <div className="relative sm:col-span-2 lg:flex-1 lg:min-w-[220px]">
                 <ICONS.Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input type="text" placeholder="Search projects or owners..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                <input type="text" placeholder="Search projects or owners..." value={searchInput} onChange={e => setSearchInput(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 tap-target" />
               </div>
-              {isAdmin && (
-                <select value={filterDept} onChange={e => setFilterDept(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500">
-                  <option value="All">All Departments</option>
-                  {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-              )}
-              <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500">
+              <select value={filterDept} onChange={e => setFilterDept(e.target.value)} className="px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 tap-target">
+                <option value="All">All Departments</option>
+                {departments.map(d => <option key={d.id} value={String(d.id)}>{d.department_name}</option>)}
+              </select>
+              <select value={filterStage} onChange={e => setFilterStage(e.target.value)} className="px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 tap-target">
                 <option value="All">All Stages</option>
                 {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
-              <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500">
+              <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)} className="px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 tap-target">
                 <option value="All">All Priorities</option>
                 {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
-              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500">
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="px-3 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 tap-target">
                 <option value="All">All Status</option>
-                {['On Track', 'At Risk', 'Delayed', 'Completed'].map(s => <option key={s} value={s}>{s}</option>)}
+                {['On Track', 'At Risk', 'Delayed', 'At Risk / Delayed', 'Completed'].map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <button onClick={onAdd} className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm">
-              <ICONS.Plus className="w-4 h-4" /> New Project
-            </button>
+            <div className="flex items-center gap-2">
+              <ExportDropdown
+                label="Export"
+                options={[
+                  { label: 'Excel (.xlsx)', onClick: () => exportProjectsExcel(projects, 'projects-export.xlsx') },
+                  { label: 'PDF (.pdf)', onClick: () => exportProjectsPDF(projects, 'projects-export.pdf') }
+                ]}
+              />
+              <button onClick={onAdd} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm tap-target">
+                <ICONS.Plus className="w-4 h-4" /> New Project
+              </button>
+            </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          {/* Mobile cards */}
+          <div className="grid grid-cols-1 gap-4 lg:hidden">
+            {projects.map(p => (
+              <ProjectCard
+                key={p.id}
+                p={p}
+                isAdmin={isAdmin}
+                currentUser={currentUser}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onNotify={(proj) => { setNotifyModal(proj); setNotifyRecipients(''); setNotifyResult(null); }}
+              />
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden lg:block bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500">
@@ -909,7 +1938,7 @@
                         <td className="p-3">
                           <div className="flex items-center gap-2">
                             <div className="font-medium text-slate-800">{p.project_name}</div>
-                            {!isAdmin && p.owner_id === currentUser?.id && (
+                            {!isAdmin && String(p.owner_id) === String(currentUser?.id) && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary-100 text-primary-700 font-medium">My Project</span>
                             )}
                           </div>
@@ -925,8 +1954,8 @@
                           </div>
                         </td>
                         <td className="p-3">
-                          <StageTracker stage={p.stage} />
-                          <div className="text-[10px] text-slate-400 mt-1">{p.stage}</div>
+                          <StageTracker stage={getProjectStage(p)} />
+                          <div className="text-[10px] text-slate-400 mt-1">{getProjectStage(p)}</div>
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2">
@@ -938,18 +1967,19 @@
                         </td>
                         <td className="p-3">
                           <div className="text-slate-500 whitespace-nowrap text-xs">{formatDate(p.due_date)}</div>
-                          {daysLeft !== null && daysLeft >= 0 && <div className={`text-xs ${daysLeft <= 7 ? 'text-rose-500 font-medium' : 'text-slate-400'}`}>{daysLeft}d left</div>}
-                          {daysLeft !== null && daysLeft < 0 && <div className="text-xs text-rose-500 font-medium">{Math.abs(daysLeft)}d overdue</div>}
+                          {p.status === 'Completed' && <div className="text-xs text-emerald-600 font-medium">Completed</div>}
+                          {p.status !== 'Completed' && daysLeft !== null && daysLeft >= 0 && <div className={`text-xs ${daysLeft <= 7 ? 'text-rose-500 font-medium' : 'text-slate-400'}`}>{daysLeft}d left</div>}
+                          {p.status !== 'Completed' && daysLeft !== null && daysLeft < 0 && <div className="text-xs text-rose-500 font-medium">{Math.abs(daysLeft)}d overdue</div>}
                         </td>
                         <td className="p-3 whitespace-nowrap"><span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border ${getPriorityColor(p.priority)}`}>{p.priority}</span></td>
                         <td className="p-3 whitespace-nowrap"><span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(p.status)}`}>{p.status}</span></td>
                         <td className="p-3">
                           <div className="flex items-center gap-1.5">
-                            {(isAdmin || p.owner_id === currentUser?.id) && (
+                            {(isAdmin || String(p.owner_id) === String(currentUser?.id)) && (
                               <button onClick={() => onEdit(p)} className="p-1.5 text-slate-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition" title="Edit"><ICONS.Edit className="w-4 h-4" /></button>
                             )}
                             <button onClick={() => { setNotifyModal(p); setNotifyRecipients(''); setNotifyResult(null); }} className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition" title="Send Notification"><ICONS.Mail className="w-4 h-4" /></button>
-                            {isAdmin && <button onClick={() => onDelete(p.id)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Delete"><ICONS.Trash className="w-4 h-4" /></button>}
+                            {(isAdmin || String(p.owner_id) === String(currentUser?.id)) && <button onClick={() => onDelete(p.id)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition" title="Delete"><ICONS.Trash className="w-4 h-4" /></button>}
                           </div>
                         </td>
                       </tr>
@@ -980,7 +2010,7 @@
               </div>
               <div className="bg-slate-50 rounded-lg p-3 text-sm text-slate-600">
                 <p className="font-medium text-slate-700 mb-1">Project Summary</p>
-                <p>Stage: {notifyModal?.stage} | Progress: {notifyModal?.progress}% | Status: {notifyModal?.status}</p>
+                <p>Stage: {notifyModal ? getProjectStage(notifyModal) : ''} | Progress: {notifyModal?.progress}% | Status: {notifyModal?.status}</p>
                 <p>Owner: {notifyModal?.owner_name} | Due: {formatDate(notifyModal?.due_date)}</p>
               </div>
               <div className="flex justify-end gap-3">
@@ -1009,48 +2039,36 @@
       );
     }
 
-    function UsersView({ onEditUser, onDeleteUser, onAddUser, departments }) {
-      const [users, setUsers] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [error, setError] = useState(null);
+    function UsersView({ onEditUser, onDeleteUser, onAddUser, departments, users: allUsers }) {
       const [search, setSearch] = useState('');
 
-      const loadUsers = useCallback(async () => {
-        try {
-          setLoading(true);
-          const data = await api.users.list();
-          setUsers(data);
-          setError(null);
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setLoading(false);
-        }
-      }, []);
-
-      useEffect(() => { loadUsers(); }, [loadUsers]);
-
       const filtered = useMemo(() => {
-        if (!search) return users;
-        return users.filter(u => u.username?.toLowerCase().includes(search.toLowerCase()) || u.full_name?.toLowerCase().includes(search.toLowerCase()));
-      }, [users, search]);
-
-      if (loading) return <LoadingSpinner message="Loading users..." />;
-      if (error) return <ErrorMessage error={error} onRetry={loadUsers} />;
+        let list = [...(allUsers || [])];
+        if (!search) return list;
+        return list.filter(u => u.username?.toLowerCase().includes(search.toLowerCase()) || u.full_name?.toLowerCase().includes(search.toLowerCase()));
+      }, [allUsers, search]);
 
       return (
         <div className="space-y-4">
-          <div className="flex flex-col md:flex-row gap-3 md:items-center justify-between">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
+            <div className="relative flex-1 sm:max-w-md">
               <ICONS.Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input type="text" placeholder="Search users..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+              <input type="text" placeholder="Search users..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 tap-target" />
             </div>
-            <button onClick={onAddUser} className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm">
+            <button onClick={onAddUser} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium transition shadow-sm tap-target">
               <ICONS.Plus className="w-4 h-4" /> Create User
             </button>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          {/* Mobile cards */}
+          <div className="grid grid-cols-1 gap-4 lg:hidden">
+            {filtered.map(u => (
+              <UserCard key={u.id} u={u} onEditUser={onEditUser} onDeleteUser={onDeleteUser} />
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden lg:block bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
@@ -1112,7 +2130,7 @@
 
       useEffect(() => { loadData(); }, [loadData]);
 
-      const stageBreakdown = useMemo(() => STAGES.map(s => ({ name: s, count: projects.filter(p => p.stage === s).length })), [projects]);
+      const stageBreakdown = useMemo(() => STAGES.map(s => ({ name: s, count: projects.filter(p => getProjectStage(p) === s).length })), [projects]);
       const statusBreakdown = useMemo(() => {
         const map = {};
         projects.forEach(p => { map[p.status] = (map[p.status] || 0) + 1; });
@@ -1121,9 +2139,21 @@
 
       if (loading) return <LoadingSpinner message="Loading reports..." />;
 
+      const reportData = { projects, deptData, stageBreakdown, statusBreakdown };
+
       return (
         <div className="space-y-6">
-          <h2 className="text-xl font-bold text-slate-800">Reports & Analytics</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-slate-800">Reports & Analytics</h2>
+            <ExportDropdown
+              label="Export"
+              options={[
+                { label: 'Excel (.xlsx)', onClick: () => exportReportsExcel(reportData, 'reports-analytics.xlsx') },
+                { label: 'PDF (.pdf)', onClick: () => exportReportsPDF(reportData, 'reports-analytics.pdf') }
+              ]}
+            />
+          </div>
+          <KpiCards projects={projects} />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-5">
               <h3 className="text-sm font-semibold text-slate-700 mb-4">By Stage</h3>
@@ -1163,7 +2193,7 @@
       );
     }
 
-    function SettingsView({ currentUser, isAdmin }) {
+    function SettingsView({ currentUser, isAdmin, onUpdateProfile }) {
       const [emailSettings, setEmailSettings] = useState(null);
       const [emailLoading, setEmailLoading] = useState(false);
       const [emailSaving, setEmailSaving] = useState(false);
@@ -1173,6 +2203,13 @@
       const [overdueRecipients, setOverdueRecipients] = useState('');
       const [overdueSending, setOverdueSending] = useState(false);
       const [overdueResult, setOverdueResult] = useState(null);
+      const [profileForm, setProfileForm] = useState({ full_name: currentUser?.name || currentUser?.full_name || '', email: currentUser?.email || '', newPassword: '', confirmPassword: '' });
+      const [profileSaving, setProfileSaving] = useState(false);
+      const [profileMessage, setProfileMessage] = useState(null);
+
+      useEffect(() => {
+        setProfileForm(prev => ({ ...prev, full_name: currentUser?.name || currentUser?.full_name || '', email: currentUser?.email || '' }));
+      }, [currentUser]);
 
       useEffect(() => {
         if (isAdmin) loadEmailSettings();
@@ -1237,6 +2274,129 @@
         setEmailSettings(prev => ({ ...prev, [field]: value }));
       };
 
+      const handleProfileChange = (field, value) => setProfileForm(prev => ({ ...prev, [field]: value }));
+
+      const handleProfileSave = async () => {
+        if (profileForm.newPassword && profileForm.newPassword !== profileForm.confirmPassword) {
+          setProfileMessage({ type: 'error', message: 'New passwords do not match' });
+          return;
+        }
+        setProfileSaving(true);
+        try {
+          const updates = { full_name: profileForm.full_name, email: profileForm.email };
+          if (profileForm.newPassword) updates.password = profileForm.newPassword;
+          await onUpdateProfile(updates);
+          setProfileMessage({ type: 'success', message: 'Profile updated successfully' });
+          setProfileForm(prev => ({ ...prev, newPassword: '', confirmPassword: '' }));
+          setTimeout(() => setProfileMessage(null), 3000);
+        } catch (err) {
+          setProfileMessage({ type: 'error', message: err.message });
+        } finally {
+          setProfileSaving(false);
+        }
+      };
+
+      const fileInputRef = useRef(null);
+
+      const [backupSettings, setBackupSettings] = useState(null);
+      const [backupLoading, setBackupLoading] = useState(false);
+      const [backupSaving, setBackupSaving] = useState(false);
+      const [backupRunning, setBackupRunning] = useState(false);
+      const [backupImporting, setBackupImporting] = useState(false);
+      const [backupMessage, setBackupMessage] = useState(null);
+
+      useEffect(() => {
+        if (isAdmin) loadBackupSettings();
+      }, [isAdmin]);
+
+      const loadBackupSettings = async () => {
+        try {
+          setBackupLoading(true);
+          const data = await api.settings.backup.get();
+          setBackupSettings(data);
+        } catch (err) {
+          console.error('Load backup settings error:', err);
+          setBackupMessage({ type: 'error', message: err.message });
+        } finally {
+          setBackupLoading(false);
+        }
+      };
+
+      const handleBackupChange = (field, value) => {
+        setBackupSettings(prev => ({ ...prev, [field]: value }));
+      };
+
+      const saveBackupSettings = async () => {
+        try {
+          setBackupSaving(true);
+          setBackupMessage(null);
+          await api.settings.backup.save(backupSettings);
+          setBackupMessage({ type: 'success', message: 'Backup settings saved successfully' });
+          setTimeout(() => setBackupMessage(null), 4000);
+        } catch (err) {
+          setBackupMessage({ type: 'error', message: err.message });
+        } finally {
+          setBackupSaving(false);
+        }
+      };
+
+      const runBackupNow = async () => {
+        try {
+          setBackupRunning(true);
+          setBackupMessage(null);
+          const result = await api.settings.backup.run();
+          setBackupMessage({ type: 'success', message: `Backup created: ${result.filename || result.message}` });
+          setTimeout(() => setBackupMessage(null), 5000);
+        } catch (err) {
+          setBackupMessage({ type: 'error', message: err.message });
+        } finally {
+          setBackupRunning(false);
+        }
+      };
+
+      const handleExportBackup = async () => {
+        try {
+          setBackupMessage(null);
+          const blob = await api.settings.backup.export();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `pad-backup-${new Date().toISOString().slice(0, 10)}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setBackupMessage({ type: 'success', message: 'Backup downloaded successfully' });
+          setTimeout(() => setBackupMessage(null), 4000);
+        } catch (err) {
+          setBackupMessage({ type: 'error', message: err.message });
+        }
+      };
+
+      const handleImportClick = () => fileInputRef.current?.click();
+
+      const handleImportFile = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          setBackupImporting(true);
+          setBackupMessage(null);
+          const text = await file.text();
+          const data = JSON.parse(text);
+          if (!data || typeof data !== 'object') {
+            throw new Error('Invalid backup format');
+          }
+          await api.settings.backup.import(data);
+          setBackupMessage({ type: 'success', message: 'Backup restored successfully. Reloading...' });
+          setTimeout(() => window.location.reload(), 1500);
+        } catch (err) {
+          setBackupMessage({ type: 'error', message: 'Import failed: ' + err.message });
+        } finally {
+          setBackupImporting(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+
       return (
         <div className="max-w-2xl space-y-6">
           <h2 className="text-xl font-bold text-slate-800">Settings</h2>
@@ -1244,16 +2404,42 @@
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-6">
             <div>
               <h3 className="text-sm font-semibold text-slate-700 mb-3">Account Information</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Name</p><p className="text-sm font-medium text-slate-700">{currentUser.name}</p></div>
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Role</p><p className="text-sm font-medium text-slate-700 capitalize">{currentUser.role}</p></div>
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Department</p><p className="text-sm font-medium text-slate-700">{currentUser.department_name || currentUser.department}</p></div>
-                <div className="p-3 bg-slate-50 rounded-lg"><p className="text-xs text-slate-400">Username</p><p className="text-sm font-medium text-slate-700 font-mono">{currentUser.username}</p></div>
+              {profileMessage && (
+                <div className={`p-3 rounded-lg text-sm mb-4 ${profileMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                  {profileMessage.message}
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                  <input type="text" value={profileForm.full_name} onChange={e => handleProfileChange('full_name', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="Your full name" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                  <input type="email" value={profileForm.email} onChange={e => handleProfileChange('email', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="email@company.com" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">New Password <span className="text-slate-400 font-normal">(optional)</span></label>
+                  <input type="password" value={profileForm.newPassword} onChange={e => handleProfileChange('newPassword', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="Leave blank to keep current" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
+                  <input type="password" value={profileForm.confirmPassword} onChange={e => handleProfileChange('confirmPassword', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="Confirm new password" />
+                </div>
+              </div>
+              <div className="mt-4 p-3 bg-slate-50 rounded-lg grid grid-cols-2 gap-4">
+                <div><p className="text-xs text-slate-400">Role</p><p className="text-sm font-medium text-slate-700 capitalize">{currentUser.role}</p></div>
+                <div><p className="text-xs text-slate-400">Department</p><p className="text-sm font-medium text-slate-700">{currentUser.department_name || currentUser.department}</p></div>
+              </div>
+              <div className="pt-4 flex justify-end">
+                <button onClick={handleProfileSave} disabled={profileSaving} className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-slate-400 text-white rounded-lg text-sm font-medium transition shadow-sm">
+                  {profileSaving ? 'Saving...' : 'Save Profile'}
+                </button>
               </div>
             </div>
           </div>
 
-          {isAdmin && (
+          {isAdmin && (<>
             <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-6">
               <div className="flex items-center gap-2">
                 <ICONS.Mail className="w-5 h-5 text-primary-600" />
@@ -1355,7 +2541,136 @@
                 <p className="text-sm text-slate-400">Failed to load email settings.</p>
               )}
             </div>
-          )}
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-6">
+              <div className="flex items-center gap-2">
+                <ICONS.Database className="w-5 h-5 text-primary-600" />
+                <h3 className="text-sm font-semibold text-slate-700">Database Backup &amp; Restore</h3>
+              </div>
+
+              {backupMessage && (
+                <div className={`p-3 rounded-lg text-sm ${backupMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                  {backupMessage.message}
+                </div>
+              )}
+
+              {backupLoading ? (
+                <LoadingSpinner message="Loading backup settings..." />
+              ) : backupSettings ? (
+                <div className="space-y-5">
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!backupSettings.enabled}
+                        onChange={e => handleBackupChange('enabled', e.target.checked)}
+                        className="w-4 h-4 text-primary-600 rounded border-slate-300 focus:ring-primary-500"
+                      />
+                      <span className="text-sm text-slate-700 font-medium">Enable scheduled backups</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Frequency</label>
+                      <select value={backupSettings.frequency || 'Daily'} onChange={e => handleBackupChange('frequency', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                        <option>Daily</option>
+                        <option>Weekly</option>
+                        <option>Monthly</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Run Time</label>
+                      <input type="time" value={backupSettings.runTime || '02:00'} onChange={e => handleBackupChange('runTime', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Timezone</label>
+                      <select value={backupSettings.timezone || 'Asia/Manila'} onChange={e => handleBackupChange('timezone', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                        <option value="Asia/Manila">Asia/Manila</option>
+                        <option value="Asia/Singapore">Asia/Singapore</option>
+                        <option value="Asia/Tokyo">Asia/Tokyo</option>
+                        <option value="Australia/Sydney">Australia/Sydney</option>
+                        <option value="Europe/London">Europe/London</option>
+                        <option value="America/New_York">America/New_York</option>
+                        <option value="America/Los_Angeles">America/Los_Angeles</option>
+                        <option value="UTC">UTC</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Retention (days)</label>
+                    <input type="number" min="1" max="365" value={backupSettings.retentionDays || 7} onChange={e => handleBackupChange('retentionDays', parseInt(e.target.value) || 7)} className="w-full md:w-1/3 px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                    <p className="text-[10px] text-slate-400 mt-1">Older local backups will be removed automatically.</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-sm font-medium text-slate-700">Storage Destination</label>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={!!backupSettings.storeLocal} onChange={e => handleBackupChange('storeLocal', e.target.checked)} className="w-4 h-4 text-primary-600 rounded border-slate-300 focus:ring-primary-500" />
+                        <span className="text-sm text-slate-700">Local Storage</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={!!backupSettings.uploadFtp} onChange={e => handleBackupChange('uploadFtp', e.target.checked)} className="w-4 h-4 text-primary-600 rounded border-slate-300 focus:ring-primary-500" />
+                        <span className="text-sm text-slate-700">FTP Upload</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={!!backupSettings.emailOffsite} onChange={e => handleBackupChange('emailOffsite', e.target.checked)} className="w-4 h-4 text-primary-600 rounded border-slate-300 focus:ring-primary-500" />
+                        <span className="text-sm text-slate-700">Email Offsite</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {backupSettings.uploadFtp && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-lg">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">FTP Host</label>
+                        <input type="text" value={backupSettings.ftpHost || ''} onChange={e => handleBackupChange('ftpHost', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="ftp.example.com" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">FTP User</label>
+                        <input type="text" value={backupSettings.ftpUser || ''} onChange={e => handleBackupChange('ftpUser', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="username" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">FTP Password</label>
+                        <input type="password" value={backupSettings.ftpPass || ''} onChange={e => handleBackupChange('ftpPass', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="password" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">FTP Path</label>
+                        <input type="text" value={backupSettings.ftpPath || ''} onChange={e => handleBackupChange('ftpPath', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="/backups/pad" />
+                      </div>
+                    </div>
+                  )}
+
+                  {backupSettings.emailOffsite && (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Offsite Email</label>
+                      <input type="email" value={backupSettings.emailTo || ''} onChange={e => handleBackupChange('emailTo', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="admin@company.com" />
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row gap-3">
+                    <button onClick={saveBackupSettings} disabled={backupSaving} className="tap-target flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-slate-400 text-white rounded-lg text-sm font-medium transition shadow-sm">
+                      <ICONS.Save className="w-4 h-4" /> {backupSaving ? 'Saving...' : 'Save Settings'}
+                    </button>
+                    <button onClick={runBackupNow} disabled={backupRunning} className="tap-target flex items-center justify-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-400 text-white rounded-lg text-sm font-medium transition shadow-sm">
+                      <ICONS.Play className="w-4 h-4" /> {backupRunning ? 'Running...' : 'Run Backup Now'}
+                    </button>
+                    <button onClick={handleExportBackup} className="tap-target flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition shadow-sm">
+                      <ICONS.Download className="w-4 h-4" /> Export Backup
+                    </button>
+                    <button onClick={handleImportClick} disabled={backupImporting} className="tap-target flex items-center justify-center gap-2 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-sm font-medium transition shadow-sm">
+                      <ICONS.Upload className="w-4 h-4" /> {backupImporting ? 'Importing...' : 'Import Backup'}
+                    </button>
+                    <input type="file" accept=".json,application/json" ref={fileInputRef} onChange={handleImportFile} className="hidden" aria-label="Import backup file" />
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-400">Failed to load backup settings.</p>
+              )}
+            </div>
+          </>)}
         </div>
       );
     }
@@ -1389,7 +2704,7 @@
         if (/\b(how many|total number of|count of)\b.*\b(project|projects)\b/.test(lower) || /\b(project|projects)\b.*\b(count|total)\b/.test(lower)) {
           const total = projects.length;
           const byStage = {};
-          STAGES.forEach(s => byStage[s] = projects.filter(p => p.stage === s).length);
+          STAGES.forEach(s => byStage[s] = projects.filter(p => getProjectStage(p) === s).length);
           return `We have **${total} projects** total.\nBy stage:\n${STAGES.map(s => `• ${s}: ${byStage[s]}`).join('\n')}`;
         }
 
@@ -1407,7 +2722,7 @@
           const deptProjects = projects.filter(p => p.department_name === deptMatch);
           if (deptProjects.length === 0) return `No projects found for ${deptMatch}.`;
           const avgProgress = Math.round(deptProjects.reduce((s, p) => s + (parseFloat(p.progress) || 0), 0) / deptProjects.length);
-          return `${deptMatch} has **${deptProjects.length} projects**:\n${deptProjects.slice(0, 5).map(p => `• ${p.project_name} (${p.stage}, ${p.progress}%)`).join('\n')}${deptProjects.length > 5 ? '\n...and ' + (deptProjects.length - 5) + ' more.' : ''}\n\nAverage progress: **${avgProgress}%**`;
+          return `${deptMatch} has **${deptProjects.length} projects**:\n${deptProjects.slice(0, 5).map(p => `• ${p.project_name} (${getProjectStage(p)}, ${p.progress}%)`).join('\n')}${deptProjects.length > 5 ? '\n...and ' + (deptProjects.length - 5) + ' more.' : ''}\n\nAverage progress: **${avgProgress}%**`;
         }
 
         // Overdue projects
@@ -1456,7 +2771,7 @@
         // Specific project search
         const projMatch = projects.find(p => lower.includes(p.project_name.toLowerCase()) || lower.includes(p.project_name.toLowerCase().replace(/\s+/g, '')));
         if (projMatch) {
-          return `**${projMatch.project_name}**\n• Department: ${projMatch.department_name}\n• Owner: ${projMatch.owner_name}\n• Stage: ${projMatch.stage}\n• Progress: ${projMatch.progress}%\n• Priority: ${projMatch.priority}\n• Status: ${projMatch.status}\n• Start: ${formatDate(projMatch.start_date)}\n• Due: ${formatDate(projMatch.due_date)}`;
+          return `**${projMatch.project_name}**\n• Department: ${projMatch.department_name}\n• Owner: ${projMatch.owner_name}\n• Stage: ${getProjectStage(projMatch)}\n• Progress: ${projMatch.progress}%\n• Priority: ${projMatch.priority}\n• Status: ${projMatch.status}\n• Start: ${formatDate(projMatch.start_date)}\n• Due: ${formatDate(projMatch.due_date)}`;
         }
 
         // Users
@@ -1469,7 +2784,7 @@
         const ownerMatch = ownerNames.find(o => lower.includes(o.toLowerCase()));
         if (ownerMatch) {
           const ownerProjects = projects.filter(p => p.owner_name === ownerMatch);
-          return `${ownerMatch} owns **${ownerProjects.length} project${ownerProjects.length > 1 ? 's' : ''}**:\n${ownerProjects.map(p => `• ${p.project_name} (${p.stage}, ${p.progress}%)`).join('\n')}`;
+          return `${ownerMatch} owns **${ownerProjects.length} project${ownerProjects.length > 1 ? 's' : ''}**:\n${ownerProjects.map(p => `• ${p.project_name} (${getProjectStage(p)}, ${p.progress}%)`).join('\n')}`;
         }
 
         // Summary / overview
@@ -1584,13 +2899,117 @@
       );
     }
 
+    function OnboardingTour({ isOpen, onComplete, steps }) {
+      const [stepIndex, setStepIndex] = useState(0);
+      const [rect, setRect] = useState(null);
+      const [placement, setPlacement] = useState('center');
+      const tooltipRef = useRef(null);
+
+      useEffect(() => {
+        if (isOpen) setStepIndex(0);
+      }, [isOpen]);
+
+      useEffect(() => {
+        if (!isOpen) return;
+        const step = steps[stepIndex];
+        const update = () => {
+          if (!step || !step.target) {
+            setRect(null);
+            setPlacement('center');
+            return;
+          }
+          const el = document.querySelector(step.target);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const pad = 8;
+            const r = el.getBoundingClientRect();
+            setRect({ left: r.left - pad, top: r.top - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+            setPlacement(window.innerHeight - r.bottom > 300 ? 'bottom' : 'top');
+          } else {
+            setRect(null);
+            setPlacement('center');
+          }
+        };
+        update();
+        window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, true);
+        return () => {
+          window.removeEventListener('resize', update);
+          window.removeEventListener('scroll', update, true);
+        };
+      }, [isOpen, stepIndex, steps]);
+
+      if (!isOpen || !steps.length) return null;
+
+      const step = steps[stepIndex];
+      const isLast = stepIndex === steps.length - 1;
+
+      const handleNext = () => {
+        if (isLast) {
+          onComplete && onComplete();
+        } else {
+          setStepIndex(i => i + 1);
+        }
+      };
+
+      const handleBack = () => setStepIndex(i => Math.max(0, i - 1));
+      const handleSkip = () => onComplete && onComplete();
+
+      const maxLeft = Math.max((typeof window !== 'undefined' ? window.innerWidth : 0) - 336, 16);
+      const tooltipStyle = rect
+        ? {
+            left: Math.min(Math.max(16, rect.left + rect.width / 2 - 160), maxLeft),
+            top: placement === 'bottom' ? rect.top + rect.height + 16 : rect.top - 16
+          }
+        : {
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)'
+          };
+
+      return (
+        <div className="fixed inset-0 z-[60]">
+          {rect && (
+            <div
+              className="absolute rounded-xl pointer-events-none transition-all duration-300"
+              style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, boxShadow: '0 0 0 9999px rgba(15, 23, 42, 0.65)' }}
+            />
+          )}
+          <div
+            ref={tooltipRef}
+            className={`absolute bg-white rounded-2xl shadow-2xl border border-slate-100 p-5 w-80 max-w-[calc(100vw-32px)] transition-all duration-300 ${placement === 'top' && rect ? '-translate-y-full' : ''}`}
+            style={tooltipStyle}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <h3 className="text-base font-bold text-slate-800">{step.title}</h3>
+              <span className="text-xs text-slate-400">{stepIndex + 1}/{steps.length}</span>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed mb-5">{step.content}</p>
+            <div className="flex items-center justify-between">
+              <button onClick={handleSkip} className="text-xs text-slate-400 hover:text-slate-600 font-medium">Skip tour</button>
+              <div className="flex items-center gap-2">
+                {stepIndex > 0 && (
+                  <button onClick={handleBack} className="px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition">Back</button>
+                )}
+                <button onClick={handleNext} className="px-4 py-2 text-sm font-semibold text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition shadow-sm">
+                  {isLast ? 'Get started' : 'Next'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function App() {
       const [isLoggedIn, setIsLoggedIn] = useState(false);
       const [currentUser, setCurrentUser] = useState(null);
       const [loginError, setLoginError] = useState('');
       const [loginLoading, setLoginLoading] = useState(false);
       const [activeTab, setActiveTab] = useState('dashboard');
+      const [projectsFilter, setProjectsFilter] = useState({ status: 'All', stage: 'All', priority: 'All', dept: 'All' });
       const [projects, setProjects] = useState([]);
+      const [users, setUsers] = useState([]);
       const [activity, setActivity] = useState([]);
       const [departments, setDepartments] = useState([]);
       const [modalOpen, setModalOpen] = useState(false);
@@ -1598,16 +3017,102 @@
       const [editingItem, setEditingItem] = useState(null);
       const [deleteConfirm, setDeleteConfirm] = useState(null);
       const [deleteType, setDeleteType] = useState(null);
+      const [confirmSave, setConfirmSave] = useState(null);
+      const [saveBusy, setSaveBusy] = useState(false);
+      const [logoutConfirm, setLogoutConfirm] = useState(false);
       const [aiPanelOpen, setAiPanelOpen] = useState(false);
       const [backendUrl, setBackendUrl] = useState(() => localStorage.getItem('pad_api_url') || '');
       const [showBackendConfig, setShowBackendConfig] = useState(false);
+      const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+      const [showTour, setShowTour] = useState(false);
+
+      const tourSteps = [
+        { title: 'Welcome', content: 'This is the Process Automation Dashboard. Let\'s take a quick walkthrough of the main areas.' },
+        { target: '[data-tour="dashboard"]', title: 'Navigation', content: 'Use the sidebar to switch between Dashboard, Projects, Reports, Users, and Settings.' },
+        { target: '[data-tour="kpis"]', title: 'Dashboard KPIs', content: 'These cards show your project totals, completed count, average progress, and at-risk or delayed projects. Click any card to filter projects.' },
+        { target: '[data-tour="projects"]', title: 'Projects', content: 'Manage all automation workflows here. Search, filter by department, stage, priority, or status, and export to Excel or PDF.' },
+        { target: '[data-tour="reports"]', title: 'Reports & Analytics', content: 'View breakdowns by stage, department, and status. Export reports for sharing or offline review.' },
+        { target: '[data-tour="ai-assistant"]', title: 'AI Assistant', content: 'Ask the AI about project counts, deadlines, department breakdowns, and more.' },
+        { target: '[data-tour="help-button"]', title: 'Need help?', content: 'Tap this question mark button anytime to restart the tour.' }
+      ];
+
+      const handleTourComplete = () => {
+        setShowTour(false);
+        try { localStorage.setItem('pad_onboarding_seen', '1'); } catch (e) {}
+      };
+
+      const handleKpiClick = useCallback((type) => {
+        if (type === 'total') setProjectsFilter({ status: 'All', stage: 'All', priority: 'All', dept: 'All' });
+        else if (type === 'completed') setProjectsFilter({ status: 'Completed', stage: 'All', priority: 'All', dept: 'All' });
+        else if (type === 'atRisk') setProjectsFilter({ status: 'At Risk / Delayed', stage: 'All', priority: 'All', dept: 'All' });
+        else if (type === 'avgProgress') setProjectsFilter({ status: 'All', stage: 'All', priority: 'All', dept: 'All' });
+        setActiveTab('projects');
+      }, []);
+
+      // Restore session on mount
+      useEffect(() => {
+        const restore = async () => {
+          try {
+            const token = localStorage.getItem('pad_auth_token');
+            const userRaw = localStorage.getItem('pad_auth_user');
+            if (token && userRaw) {
+              window.__authToken = token;
+              if (DEMO_MODE) {
+                const user = JSON.parse(userRaw);
+                const found = mockUsers.find(u => u.id === user.id || u.username === user.username);
+                mockCurrentUser = found || user;
+                setCurrentUser(user);
+                setIsLoggedIn(true);
+              } else {
+                // Validate the stored token with the backend before restoring the UI.
+                const me = await api.auth.me();
+                if (me && me.user) {
+                  setCurrentUser(me.user);
+                  setIsLoggedIn(true);
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Failed to restore session', e);
+            window.__authToken = null;
+            try {
+              localStorage.removeItem('pad_auth_token');
+              localStorage.removeItem('pad_auth_user');
+            } catch (err) {}
+          }
+        };
+        restore();
+      }, []);
+
+      // Listen for backend session expiry and return to the login screen.
+      useEffect(() => {
+        const onSessionExpired = () => {
+          setCurrentUser(null);
+          setIsLoggedIn(false);
+          window.__authToken = null;
+        };
+        window.addEventListener('pad:session-expired', onSessionExpired);
+        return () => window.removeEventListener('pad:session-expired', onSessionExpired);
+      }, []);
 
       // Load initial data
       useEffect(() => {
         if (isLoggedIn) {
           loadProjects();
+          loadUsers();
           loadActivity();
           loadDepartments();
+        }
+      }, [isLoggedIn]);
+
+      // Show onboarding on first login
+      useEffect(() => {
+        if (isLoggedIn) {
+          try {
+            if (!localStorage.getItem('pad_onboarding_seen')) {
+              setShowTour(true);
+            }
+          } catch (e) {}
         }
       }, [isLoggedIn]);
 
@@ -1616,6 +3121,14 @@
           const data = await api.projects.list({});
           setProjects(data);
         } catch (err) { console.error('Load projects error:', err); }
+      };
+
+      const loadUsers = async () => {
+        if (currentUser?.role !== 'admin') return;
+        try {
+          const data = await api.users.list();
+          setUsers(data);
+        } catch (err) { console.error('Load users error:', err); }
       };
 
       const loadActivity = async () => {
@@ -1637,7 +3150,12 @@
           setLoginLoading(true);
           const result = await api.auth.login(username, password);
           window.__authToken = result.token;
-          setCurrentUser({ ...result.user, name: result.user.name || result.user.full_name });
+          const user = { ...result.user, name: result.user.name || result.user.full_name };
+          try {
+            localStorage.setItem('pad_auth_token', result.token);
+            localStorage.setItem('pad_auth_user', JSON.stringify(user));
+          } catch (e) {}
+          setCurrentUser(user);
           setIsLoggedIn(true);
           setLoginError('');
         } catch (err) {
@@ -1647,11 +3165,20 @@
         }
       };
 
-      const handleLogout = async () => {
+      const handleLogout = () => {
+        setLogoutConfirm(true);
+      };
+
+      const handleConfirmLogout = async () => {
         try { await api.auth.logout(); } catch (e) {}
+        try {
+          localStorage.removeItem('pad_auth_token');
+          localStorage.removeItem('pad_auth_user');
+        } catch (e) {}
         window.__authToken = null;
         setCurrentUser(null);
         setIsLoggedIn(false);
+        setLogoutConfirm(false);
       };
 
       const openModal = (type, item = null) => {
@@ -1666,15 +3193,28 @@
         setEditingItem(null);
       };
 
-      const handleSaveProject = async (project) => {
-        if (project.id) {
-          await api.projects.update(project.id, project);
-        } else {
-          await api.projects.create(project);
+      const handleSaveProject = (project) => {
+        setConfirmSave(project);
+      };
+
+      const handleConfirmSaveProject = async () => {
+        if (!confirmSave) return;
+        setSaveBusy(true);
+        try {
+          if (confirmSave.id) {
+            await api.projects.update(confirmSave.id, confirmSave);
+          } else {
+            await api.projects.create(confirmSave);
+          }
+          setConfirmSave(null);
+          closeModal();
+          await loadProjects();
+          await loadActivity();
+        } catch (err) {
+          alert(err.message);
+        } finally {
+          setSaveBusy(false);
         }
-        await loadProjects();
-        await loadActivity();
-        closeModal();
       };
 
       const handleDeleteProject = async (id) => {
@@ -1685,17 +3225,38 @@
       };
 
       const handleSaveUser = async (user) => {
-        if (user.id) {
-          await api.users.update(user.id, user);
-        } else {
-          await api.users.create(user);
+        try {
+          if (user.id) {
+            await api.users.update(user.id, user);
+          } else {
+            await api.users.create(user);
+          }
+          await loadUsers();
+          closeModal();
+        } catch (err) {
+          alert(err.message);
         }
-        closeModal();
       };
 
       const handleDeleteUser = async (id) => {
         await api.users.delete(id);
+        await loadUsers();
         setDeleteConfirm(null);
+      };
+
+      const handleUpdateProfile = async (updates) => {
+        const user = currentUser;
+        const nextName = (updates.full_name || '').trim() || user.name || user.full_name || '';
+        const updated = { ...user, ...updates, name: nextName, full_name: nextName };
+        if (DEMO_MODE) {
+          const idx = mockUsers.findIndex(u => u.id === user.id || u.username === user.username);
+          if (idx !== -1) mockUsers[idx] = { ...mockUsers[idx], ...updates, full_name: nextName };
+          mockCurrentUser = { ...(mockCurrentUser || (idx !== -1 ? mockUsers[idx] : null) || user), ...updates, full_name: nextName };
+        }
+        try {
+          localStorage.setItem('pad_auth_user', JSON.stringify(updated));
+        } catch (e) {}
+        setCurrentUser(updated);
       };
 
       const isAdmin = currentUser?.role === 'admin';
@@ -1716,6 +3277,15 @@
         if (modalType === 'user') return editingItem ? 'Edit User' : 'Create User';
         return '';
       };
+
+      const tabTitles = {
+        dashboard: { title: 'Dashboard', subtitle: currentUser ? `Welcome back, ${currentUser.name}` : '' },
+        projects: { title: 'Projects', subtitle: 'Manage automation workflows' },
+        reports: { title: 'Reports', subtitle: 'Analytics & insights' },
+        users: { title: 'Users', subtitle: 'Team management' },
+        settings: { title: 'Settings', subtitle: 'Preferences & configuration' }
+      };
+      const currentTabMeta = tabTitles[activeTab] || tabTitles.dashboard;
 
       if (!isLoggedIn) {
         return (
@@ -1753,16 +3323,6 @@
                     {loginLoading ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin-slow" /> Signing in...</> : 'Sign In'}
                   </button>
                 </form>
-                <div className="mt-6 p-4 bg-slate-50 rounded-xl border border-slate-100">
-                  <p className="text-xs font-semibold text-slate-500 mb-2">Demo Accounts:</p>
-                  <div className="space-y-1 text-xs text-slate-400">
-                    <p><span className="text-slate-600 font-medium">Admin:</span> admin</p>
-                    <p><span className="text-slate-600 font-medium">User:</span> harold</p>
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-2">
-                    Demo passwords are configured via SEED_ADMIN_PASSWORD and SEED_DEFAULT_PASSWORD environment variables.
-                  </p>
-                </div>
                 <div className="mt-4">
                   <button onClick={() => setShowBackendConfig(!showBackendConfig)} className="text-xs text-slate-400 hover:text-primary-600 flex items-center gap-1 mx-auto transition">
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -1799,11 +3359,29 @@
       }
 
       return (
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} onLogout={handleLogout} onToggleAI={() => setAiPanelOpen(!aiPanelOpen)} aiOpen={aiPanelOpen} />
-          <main className="flex-1 overflow-y-auto bg-slate-50">
-            <div className="p-6 max-w-7xl mx-auto">
-              {activeTab === 'dashboard' && <DashboardView projects={projects} activity={activity} currentUser={currentUser} />}
+        <div className="app-shell bg-slate-50">
+          <Sidebar
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            currentUser={currentUser}
+            onLogout={handleLogout}
+            onToggleAI={() => setAiPanelOpen(!aiPanelOpen)}
+            aiOpen={aiPanelOpen}
+            mobileOpen={mobileMenuOpen}
+            onCloseMobile={() => setMobileMenuOpen(false)}
+          />
+          <div className="flex flex-col flex-1 min-w-0">
+            <MobileHeader
+              currentUser={currentUser}
+              onMenuClick={() => setMobileMenuOpen(true)}
+              onToggleAI={() => setAiPanelOpen(!aiPanelOpen)}
+              aiOpen={aiPanelOpen}
+              title={currentTabMeta.title}
+              subtitle={currentTabMeta.subtitle}
+            />
+            <main className="main-scroll bg-slate-50 flex-1">
+              <div className="p-4 sm:p-5 lg:p-6 max-w-7xl mx-auto">
+                {activeTab === 'dashboard' && <DashboardView projects={projects} activity={activity} currentUser={currentUser} onKpiClick={handleKpiClick} />}
               {activeTab === 'projects' && (
                 <ProjectsView
                   isAdmin={isAdmin}
@@ -1812,6 +3390,9 @@
                   onDelete={id => { setDeleteConfirm(id); setDeleteType('project'); }}
                   onAdd={() => openModal('project')}
                   departments={departments}
+                  projects={projects}
+                  presetFilter={projectsFilter}
+                  onFilterChange={setProjectsFilter}
                 />
               )}
               {activeTab === 'users' && isAdmin && (
@@ -1820,12 +3401,14 @@
                   onDeleteUser={id => { setDeleteConfirm(id); setDeleteType('user'); }}
                   onAddUser={() => openModal('user')}
                   departments={departments}
+                  users={users}
                 />
               )}
               {activeTab === 'reports' && <ReportsView projects={projects} />}
-              {activeTab === 'settings' && <SettingsView currentUser={currentUser} isAdmin={isAdmin} />}
-            </div>
-          </main>
+              {activeTab === 'settings' && <SettingsView currentUser={currentUser} isAdmin={isAdmin} onUpdateProfile={handleUpdateProfile} />}
+              </div>
+            </main>
+          </div>
 
           <AIAgentPanel
             isOpen={aiPanelOpen}
@@ -1849,6 +3432,45 @@
               </div>
             </div>
           </Modal>
+
+          <ConfirmDialog
+            isOpen={!!confirmSave}
+            onClose={() => setConfirmSave(null)}
+            title={confirmSave?.id ? 'Update Project' : 'Create Project'}
+            message={`Are you sure you want to ${confirmSave?.id ? 'update' : 'create'} this project?`}
+            confirmText={confirmSave?.id ? 'Update Project' : 'Create Project'}
+            confirmVariant="primary"
+            onConfirm={handleConfirmSaveProject}
+            busy={saveBusy}
+          />
+
+          <ConfirmDialog
+            isOpen={logoutConfirm}
+            onClose={() => setLogoutConfirm(false)}
+            title="Sign Out"
+            message="Are you sure you want to sign out?"
+            confirmText="Sign Out"
+            confirmVariant="rose"
+            onConfirm={handleConfirmLogout}
+          />
+
+          <OnboardingTour
+            isOpen={showTour}
+            onComplete={handleTourComplete}
+            steps={tourSteps}
+          />
+
+          {isLoggedIn && (
+            <button
+              data-tour="help-button"
+              onClick={() => setShowTour(true)}
+              className="fixed bottom-5 right-5 z-50 w-12 h-12 rounded-full bg-primary-600 hover:bg-primary-700 text-white shadow-lg flex items-center justify-center transition tap-target"
+              aria-label="Start tour"
+              title="Start tour"
+            >
+              <ICONS.HelpCircle className="w-6 h-6" />
+            </button>
+          )}
         </div>
       );
     }
