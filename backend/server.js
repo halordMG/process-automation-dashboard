@@ -337,7 +337,7 @@ app.put('/api/projects/:id', authMiddleware, rbac.requirePermission('projects', 
     const { id } = req.params;
     let { department_id, project_name, owner_name, owner_id, stage, progress, start_date, due_date, priority, status, description } = req.body;
 
-    const oldProj = await get(`SELECT stage, owner_id, owner_name FROM projects WHERE id = ${p ? '$1' : '?'}`, [id]);
+    const oldProj = await get(`SELECT stage, owner_id, owner_name, department_id FROM projects WHERE id = ${p ? '$1' : '?'}`, [id]);
     if (!oldProj) return res.status(404).json({ error: 'Project not found' });
 
     if (req.user.role !== 'admin') {
@@ -346,8 +346,8 @@ app.put('/api/projects/:id', authMiddleware, rbac.requirePermission('projects', 
       }
       owner_name = req.user.full_name || req.user.name;
       owner_id = req.user.id;
-      const userDept = await get(`SELECT department_id FROM users WHERE id = ${p ? '$1' : '?'}`, [req.user.id]);
-      if (userDept) department_id = userDept.department_id;
+      // Non-admins cannot change department in the UI; preserve the project's existing department.
+      department_id = oldProj.department_id;
     }
 
     if (!owner_id && owner_name) {
