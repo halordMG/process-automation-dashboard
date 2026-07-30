@@ -113,8 +113,17 @@
     // API CONFIG — Supports GitHub Pages + external backend (NAS, Render, etc.)
     // Usage: add ?api=http://your-nas-ip:3001/api to URL once, or set via localStorage
     // ============================================================
+    const IS_FIREBASE_HOSTING = location.hostname.endsWith('.web.app') || location.hostname.endsWith('.firebaseapp.com');
+    const IS_GITHUB_PAGES = location.hostname.endsWith('.github.io');
+    // When served from the ECS/nginx backend (or local dev), always use the REST API instead of Firestore/mock data.
+    const IS_LIVE_BACKEND = !(IS_FIREBASE_HOSTING || IS_GITHUB_PAGES);
+
     const API_BASE = (() => {
       try {
+        // Live backend deployments should never use a saved pad_api_url (e.g. localhost from old env.js).
+        if (IS_LIVE_BACKEND) {
+          localStorage.removeItem('pad_api_url');
+        }
         const urlParams = new URLSearchParams(window.location.search);
         const paramApi = urlParams.get('api');
         if (paramApi) {
@@ -127,10 +136,6 @@
       } catch (e) {}
       return `${window.location.protocol}//${window.location.host}/api`;
     })();
-    const IS_FIREBASE_HOSTING = location.hostname.endsWith('.web.app') || location.hostname.endsWith('.firebaseapp.com');
-    const IS_GITHUB_PAGES = location.hostname.endsWith('.github.io');
-    // When served from the ECS/nginx backend (or local dev), always use the REST API instead of Firestore/mock data.
-    const IS_LIVE_BACKEND = !(IS_FIREBASE_HOSTING || IS_GITHUB_PAGES);
 
     function hasExplicitDemoFlag() {
       try {
@@ -452,20 +457,19 @@
       auth: {
         async login(username, password) {
           if (DEMO_MODE || !firestore) return mockRequest('/auth/login', { method: 'POST', body: { username, password } });
-          // Always attempt backend login first when a backend is available.
-          let backendError = null;
-          try {
-            const result = await api.request('/auth/login', { method: 'POST', body: { username, password } });
-            if (result && result.token) {
-              window.__authToken = result.token;
-              localStorage.setItem('pad_auth_token', result.token);
-              localStorage.setItem('pad_auth_user', JSON.stringify(result.user));
-              return result;
-            }
-          } catch (e) {
-            backendError = e;
-            console.warn('[Auth] Backend login failed, trying Firestore:', e);
+          // Live backend deployments must use the REST API; do not fall back to Firestore on failure.
+          const result = await api.request('/auth/login', { method: 'POST', body: { username, password } });
+          if (result && result.token) {
+            const user = { ...result.user, name: result.user.name || result.user.full_name };
+            window.__authToken = result.token;
+            localStorage.setItem('pad_auth_token', result.token);
+            localStorage.setItem('pad_auth_user', JSON.stringify(user));
+            return { token: result.token, user };
           }
+          throw new Error('Login failed: invalid response from server');
+        },
+        // Kept for non-live deployments; not used when IS_LIVE_BACKEND is true.
+        async _firestoreLogin(username, password, backendError) {
           try {
             const hash = await sha256(password);
             const snap = await firestore.collection('users')
@@ -510,6 +514,9 @@
           if (!token || !userRaw) throw new Error('Not authenticated');
           // Validate the stored token against the backend (tokens are in-memory and can be reset on server restart).
           const backend = await api.request('/auth/me');
+          if (backend && backend.user) {
+            backend.user.name = backend.user.name || backend.user.full_name;
+          }
           return backend;
         },
         async logout() {
