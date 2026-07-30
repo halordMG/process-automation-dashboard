@@ -587,62 +587,16 @@
       },
       users: {
         async list() {
-          if (DEMO_MODE || !firestore) return mockRequest('/users');
-          try {
-            const snap = await firestore.collection('users').get();
-            return snap.docs.map(doc => {
-              const data = doc.data();
-              return { id: doc.id, ...data, full_name: data.full_name || data.name };
-            });
-          } catch (e) {
-            console.error('[Firestore] Users list error:', e);
-            return mockRequest('/users');
-          }
+          return api.request('/users');
         },
         async create(data) {
-          if (DEMO_MODE || !firestore) return mockRequest('/users', { method: 'POST', body: data });
-          try {
-            const payload = { ...data };
-            if (payload.password) {
-              payload.password_hash = await sha256(payload.password);
-              delete payload.password;
-            }
-            payload.created_at = new Date().toISOString();
-            payload.updated_at = payload.created_at;
-            if (payload.is_active === undefined) payload.is_active = 1;
-            const ref = await firestore.collection('users').add(payload);
-            return { id: ref.id, ...payload };
-          } catch (e) {
-            console.error('[Firestore] Users create error:', e);
-            return mockRequest('/users', { method: 'POST', body: data });
-          }
+          return api.request('/users', { method: 'POST', body: data });
         },
         async update(id, data) {
-          if (DEMO_MODE || !firestore) return mockRequest(`/users/${id}`, { method: 'PUT', body: data });
-          try {
-            const payload = { ...data };
-            if (payload.password) {
-              payload.password_hash = await sha256(payload.password);
-              delete payload.password;
-            }
-            payload.updated_at = new Date().toISOString();
-            delete payload.id;
-            await firestore.collection('users').doc(id).update(payload);
-            return { id, ...payload };
-          } catch (e) {
-            console.error('[Firestore] Users update error:', e);
-            return mockRequest(`/users/${id}`, { method: 'PUT', body: data });
-          }
+          return api.request(`/users/${id}`, { method: 'PUT', body: data });
         },
         async delete(id) {
-          if (DEMO_MODE || !firestore) return mockRequest(`/users/${id}`, { method: 'DELETE' });
-          try {
-            await firestore.collection('users').doc(id).delete();
-            return {};
-          } catch (e) {
-            console.error('[Firestore] Users delete error:', e);
-            return mockRequest(`/users/${id}`, { method: 'DELETE' });
-          }
+          return api.request(`/users/${id}`, { method: 'DELETE' });
         }
       },
       activity: {
