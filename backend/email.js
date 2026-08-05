@@ -85,7 +85,7 @@ async function saveSettings(settings) {
  * Create a nodemailer transporter from settings
  */
 function createTransporter(settings) {
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     host: settings.smtpHost,
     port: settings.smtpPort,
     secure: settings.smtpSecure,
