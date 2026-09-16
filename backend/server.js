@@ -1034,28 +1034,99 @@ app.post('/api/backup/settings', authMiddleware, rbac.requirePermission('setting
   }
 });
 
+async function collectBackupData(exportedBy) {
+  const data = {
+    exportedAt: new Date().toISOString(),
+    exportedBy,
+    version: '1.0',
+  };
+  data.departments = await all('SELECT * FROM departments ORDER BY id');
+  data.users = await all('SELECT id, username, password_hash, full_name, email, role, department_id, is_active, last_login, created_at, updated_at FROM users ORDER BY id');
+  data.projects = await all('SELECT * FROM projects ORDER BY id');
+  data.activityLogs = await all('SELECT * FROM activity_logs ORDER BY id');
+  data.projectStageHistory = await all('SELECT * FROM project_stage_history ORDER BY id');
+  data.emailSettings = await all('SELECT * FROM email_settings ORDER BY id LIMIT 1');
+  data.backupSettings = await all('SELECT * FROM backup_settings ORDER BY id LIMIT 1');
+  return data;
+}
+
+function saveBackupFile(data) {
+  const fs = require('fs');
+  const backupDir = process.env.BACKUP_DIR || path.join(__dirname, '..', 'backup');
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+
+  const filename = `pad-backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+  const filePath = path.join(backupDir, filename);
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  return { filename, filePath, backupDir };
+}
+
+async function cleanupOldBackups(backupDir, retentionDays) {
+  const fs = require('fs');
+  if (!fs.existsSync(backupDir) || retentionDays <= 0) return;
+  const cutoff = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+  const files = fs.readdirSync(backupDir).filter(f => /^pad-backup-.*\.json$/.test(f));
+  let removed = 0;
+  for (const file of files) {
+    const filePath = path.join(backupDir, file);
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.mtimeMs < cutoff) {
+        fs.unlinkSync(filePath);
+        removed++;
+      }
+    } catch (err) {
+      console.error(`[Backup] Failed to remove old backup ${file}:`, err.message);
+    }
+  }
+  if (removed) console.log(`[Backup] Removed ${removed} backup(s) older than ${retentionDays} days`);
+}
+
+async function runScheduledBackup() {
+  try {
+    const settings = await getBackupSettings();
+    if (!settings || !settings.enabled) return;
+
+    const now = new Date();
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const currentDate = now.toISOString().slice(0, 10);
+
+    if (currentTime !== settings.runTime) return;
+    if (runScheduledBackup.lastRunDate === currentDate) return;
+
+    console.log('[Backup] Running scheduled backup...');
+    const data = await collectBackupData('scheduler');
+    const { filename, filePath, backupDir } = saveBackupFile(data);
+    await cleanupOldBackups(backupDir, settings.retentionDays);
+
+    const systemUser = await get(`SELECT id, full_name FROM users WHERE role = ${db.isPostgres() ? '$1' : '?'} ORDER BY id LIMIT 1`, ['admin']);
+    await run(`
+      INSERT INTO activity_logs (user_id, user_name, action_type, description)
+      VALUES ${db.isPostgres() ? '($1,$2,$3,$4)' : '(?,?,?,?)'}
+    `, [systemUser ? systemUser.id : null, systemUser ? systemUser.full_name : 'Scheduler', 'general', `Scheduled backup created: ${filename}`]);
+
+    runScheduledBackup.lastRunDate = currentDate;
+    console.log('[Backup] Scheduled backup completed:', filename);
+  } catch (err) {
+    console.error('[Backup] Scheduled backup failed:', err.message);
+  }
+}
+
+function initBackupScheduler() {
+  setInterval(runScheduledBackup, 60 * 1000);
+  runScheduledBackup();
+  console.log('[Backup] Scheduler started (checking every 60 seconds)');
+}
+
 app.post('/api/backup/run', authMiddleware, rbac.requirePermission('settings', 'update'), async (req, res) => {
   try {
-    const data = {
-      exportedAt: new Date().toISOString(),
-      exportedBy: req.user.username,
-      version: '1.0',
-    };
-    data.departments = await all('SELECT * FROM departments ORDER BY id');
-    data.users = await all('SELECT id, username, password_hash, full_name, email, role, department_id, is_active, last_login, created_at, updated_at FROM users ORDER BY id');
-    data.projects = await all('SELECT * FROM projects ORDER BY id');
-    data.activityLogs = await all('SELECT * FROM activity_logs ORDER BY id');
-    data.projectStageHistory = await all('SELECT * FROM project_stage_history ORDER BY id');
-    data.emailSettings = await all('SELECT * FROM email_settings ORDER BY id LIMIT 1');
-    data.backupSettings = await all('SELECT * FROM backup_settings ORDER BY id LIMIT 1');
+    const data = await collectBackupData(req.user.username);
+    const { filename, filePath, backupDir } = saveBackupFile(data);
 
-    const fs = require('fs');
-    const backupDir = process.env.BACKUP_DIR || path.join(__dirname, '..', 'backup');
-    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-
-    const filename = `pad-backup-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
-    const filePath = path.join(backupDir, filename);
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+    const settings = await getBackupSettings();
+    if (settings && settings.retentionDays > 0) {
+      await cleanupOldBackups(backupDir, settings.retentionDays);
+    }
 
     await run(`
       INSERT INTO activity_logs (user_id, user_name, action_type, description)
@@ -1082,6 +1153,7 @@ app.get('/api/health', (req, res) => {
 db.initPool().then(async () => {
   await initEmailTable();
   await initBackupTable();
+  initBackupScheduler();
   app.listen(PORT, () => {
     console.log(`\n==============================================`);
     console.log(`Process Automation API Server`);
