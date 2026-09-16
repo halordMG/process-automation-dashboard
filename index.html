@@ -2401,6 +2401,131 @@
       const [backupImporting, setBackupImporting] = useState(false);
       const [backupMessage, setBackupMessage] = useState(null);
 
+      // System Health Score state
+      const [systemScore, setSystemScore] = useState({ overall: 0, personas: [], recommendations: [] });
+      const [scoreLoading, setScoreLoading] = useState(false);
+
+      useEffect(() => {
+        if (isAdmin) {
+          loadBackupSettings();
+          calculateSystemScore();
+        }
+      }, [isAdmin]);
+
+      const calculateSystemScore = async () => {
+        setScoreLoading(true);
+        const personas = [];
+        const recommendations = [];
+        const checks = { apiHealthy: false, hasProjects: false, hasUsers: false, hasDepartments: false, emailConfigured: false, backupConfigured: false, httpsEnabled: false, hasAuthToken: false, metaPresent: false, titlePresent: false, semanticHTML: false, fastLoad: false };
+
+        try {
+          // Senior Dev checks — architecture & system health
+          try {
+            const healthResp = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(5000) });
+            checks.apiHealthy = healthResp.ok;
+          } catch (e) { checks.apiHealthy = false; }
+
+          try {
+            const projects = await api.projects.list({});
+            checks.hasProjects = Array.isArray(projects) && projects.length > 0;
+          } catch (e) { checks.hasProjects = false; }
+
+          try {
+            const users = await api.users.list();
+            checks.hasUsers = Array.isArray(users) && users.length > 0;
+          } catch (e) { checks.hasUsers = false; }
+
+          try {
+            const depts = await api.departments.list();
+            checks.hasDepartments = Array.isArray(depts) && depts.length > 0;
+          } catch (e) { checks.hasDepartments = false; }
+
+          // Cyber Security checks
+          checks.httpsEnabled = window.location.protocol === 'https:';
+          checks.hasAuthToken = !!window.__authToken;
+
+          try {
+            const emailData = await api.settings.email.get();
+            checks.emailConfigured = !!(emailData && emailData.smtp_host && emailData.enabled);
+          } catch (e) { checks.emailConfigured = false; }
+
+          try {
+            const backupData = await api.settings.backup.get();
+            checks.backupConfigured = !!(backupData && backupData.enabled);
+          } catch (e) { checks.backupConfigured = false; }
+
+          // SEO checks
+          checks.titlePresent = !!document.title && document.title.length > 0;
+          checks.metaPresent = !!document.querySelector('meta[name="description"]') && document.querySelector('meta[name="description"]').content.length > 0;
+          checks.semanticHTML = !!document.querySelector('main, [role="main"], #root, #app');
+          checks.fastLoad = performance.timing ? (performance.timing.domContentLoadedEnd - performance.timing.navigationStart) < 3000 : true;
+        } catch (e) {
+          console.error('System score calculation error:', e);
+        }
+
+        // Score each persona (25 points per check, 4 checks each = 100)
+        const seniorDevChecks = [checks.apiHealthy, checks.hasProjects, checks.hasUsers, checks.hasDepartments];
+        const seniorDevScore = seniorDevChecks.filter(Boolean).length * 25;
+        personas.push({
+          name: 'Senior Software Developer',
+          icon: '\u{1F468}\u200D\u{1F4BB}',
+          score: seniorDevScore,
+          status: seniorDevScore >= 80 ? 'System architecture is solid' : seniorDevScore >= 50 ? 'Some infrastructure gaps detected' : 'Critical infrastructure issues found'
+        });
+        if (seniorDevScore < 100) {
+          if (!checks.apiHealthy) recommendations.push({ title: 'Backend API Health', description: 'Ensure the backend API server is running and responding to health checks consistently.' });
+          if (!checks.hasProjects) recommendations.push({ title: 'Project Data Required', description: 'No projects found. Create projects to demonstrate system functionality and data management capabilities.' });
+          if (!checks.hasUsers) recommendations.push({ title: 'User Management', description: 'No active users detected. Add team members to enable collaboration and role-based access.' });
+          if (!checks.hasDepartments) recommendations.push({ title: 'Department Setup', description: 'Configure departments to organize projects and enable department-level reporting.' });
+        }
+
+        const cyberChecks = [checks.httpsEnabled, checks.hasAuthToken, checks.emailConfigured, checks.backupConfigured];
+        const cyberScore = cyberChecks.filter(Boolean).length * 25;
+        personas.push({
+          name: 'Cyber Security Engineer',
+          icon: '\u{1F6E1}\uFE0F',
+          score: cyberScore,
+          status: cyberScore >= 80 ? 'Security posture is strong' : cyberScore >= 50 ? 'Security gaps need attention' : 'Critical security vulnerabilities found'
+        });
+        if (cyberScore < 100) {
+          if (!checks.httpsEnabled) recommendations.push({ title: 'Enable HTTPS', description: 'Your connection is not encrypted. Deploy SSL certificates and enforce HTTPS for all traffic.' });
+          if (!checks.hasAuthToken) recommendations.push({ title: 'Authentication Token Missing', description: 'Session token not detected. Ensure users authenticate through the secure login system.' });
+          if (!checks.emailConfigured) recommendations.push({ title: 'Configure Email Notifications', description: 'Email service is not configured. Set up SMTP settings to enable project notifications and alerts.' });
+          if (!checks.backupConfigured) recommendations.push({ title: 'Enable Automated Backups', description: 'Backup system is not active. Configure scheduled backups to protect against data loss.' });
+        }
+
+        const qaChecks = [checks.hasProjects, checks.hasUsers, checks.hasDepartments, checks.apiHealthy];
+        const qaScore = qaChecks.filter(Boolean).length * 25;
+        personas.push({
+          name: 'QA Engineer',
+          icon: '\u{1F9EA}',
+          score: qaScore,
+          status: qaScore >= 80 ? 'Quality metrics look good' : qaScore >= 50 ? 'Testing coverage needs improvement' : 'System reliability at risk'
+        });
+        if (qaScore < 100) {
+          if (!checks.apiHealthy) recommendations.push({ title: 'API Reliability', description: 'Backend API is not responding. Run health diagnostics and check server logs for errors.' });
+        }
+
+        const seoChecks = [checks.titlePresent, checks.metaPresent, checks.semanticHTML, checks.fastLoad];
+        const seoScore = seoChecks.filter(Boolean).length * 25;
+        personas.push({
+          name: 'SEO Specialist',
+          icon: '\u{1F50D}',
+          score: seoScore,
+          status: seoScore >= 80 ? 'Search optimization is solid' : seoScore >= 50 ? 'SEO needs improvement' : 'Search visibility is poor'
+        });
+        if (seoScore < 100) {
+          if (!checks.titlePresent) recommendations.push({ title: 'Page Title Missing', description: 'Add a descriptive <title> tag to improve search engine visibility and user experience.' });
+          if (!checks.metaPresent) recommendations.push({ title: 'Meta Description Needed', description: 'Add a meta description tag to provide search engines with a summary of your page content.' });
+          if (!checks.semanticHTML) recommendations.push({ title: 'Semantic HTML', description: 'Use semantic HTML elements (main, section, article) to improve accessibility and SEO.' });
+          if (!checks.fastLoad) recommendations.push({ title: 'Improve Page Speed', description: 'Page load time exceeds 3 seconds. Optimize assets and enable caching for better Core Web Vitals.' });
+        }
+
+        const overall = Math.round((seniorDevScore + cyberScore + qaScore + seoScore) / 4);
+        setSystemScore({ overall, personas, recommendations });
+        setScoreLoading(false);
+      };
+
       useEffect(() => {
         if (isAdmin) loadBackupSettings();
       }, [isAdmin]);
@@ -2764,6 +2889,111 @@
                 </div>
               ) : (
                 <p className="text-sm text-slate-400">Failed to load backup settings.</p>
+              )}
+            </div>
+
+            {/* System Score Section */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ICONS.Shield className="w-5 h-5 text-primary-600" />
+                  <h3 className="text-sm font-semibold text-slate-700">System Health Score</h3>
+                </div>
+                <button onClick={calculateSystemScore} disabled={scoreLoading} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary-600 hover:text-primary-700 hover:bg-primary-50 rounded-lg transition-colors disabled:opacity-50" aria-label="Recalculate system score">
+                  <ICONS.Refresh className={`w-3.5 h-3.5 ${scoreLoading ? 'animate-spin' : ''}`} />
+                  {scoreLoading ? 'Analyzing...' : 'Recalculate'}
+                </button>
+              </div>
+
+              {scoreLoading && systemScore.overall === 0 ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-8 h-8 border-3 border-primary-200 border-t-primary-600 rounded-full animate-spin" />
+                    <p className="text-sm text-slate-500">Analyzing system health across all personas...</p>
+                  </div>
+                </div>
+              ) : (
+              <React.Fragment>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Overall Score */}
+                <div className="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-primary-50 to-teal-50 rounded-lg">
+                  <div className="relative w-32 h-32">
+                    <svg className="w-32 h-32 transform -rotate-90" viewBox="0 0 100 100">
+                      <circle cx="50" cy="50" r="45" fill="none" stroke="#e2e8f0" strokeWidth="8" />
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="45"
+                        fill="none"
+                        stroke="url(#scoreGradient)"
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray={`${systemScore.overall * 2.83} 283`}
+                        className="transition-all duration-1000"
+                      />
+                      <defs>
+                        <linearGradient id="scoreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#0ea5e9" />
+                          <stop offset="100%" stopColor="#14b8a6" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-3xl font-bold text-slate-800">{systemScore.overall}</span>
+                      <span className="text-xs text-slate-500">Overall</span>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm font-medium text-slate-700 text-center">
+                    {systemScore.overall >= 80 ? 'Excellent' : systemScore.overall >= 60 ? 'Good' : systemScore.overall >= 40 ? 'Fair' : 'Needs Improvement'}
+                  </p>
+                </div>
+
+                {/* Persona Scores */}
+                <div className="space-y-3">
+                  {systemScore.personas.map((persona, idx) => (
+                    <div key={idx} className="p-3 bg-slate-50 rounded-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{persona.icon}</span>
+                          <span className="text-sm font-medium text-slate-700">{persona.name}</span>
+                        </div>
+                        <span className={`text-sm font-bold ${persona.score >= 80 ? 'text-emerald-600' : persona.score >= 60 ? 'text-amber-600' : 'text-rose-600'}`}>
+                          {persona.score}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full transition-all duration-1000 ${persona.score >= 80 ? 'bg-emerald-500' : persona.score >= 60 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                          style={{ width: `${persona.score}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">{persona.status}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Recommendations */}
+              <div className="border-t border-slate-100 pt-4">
+                <h4 className="text-sm font-semibold text-slate-700 mb-3">Recommendations</h4>
+                <div className="space-y-2">
+                  {systemScore.recommendations.length === 0 ? (
+                    <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-lg">
+                      <span className="text-emerald-500 mt-0.5">✓</span>
+                      <p className="text-sm text-emerald-700">All systems are performing well. No recommendations at this time.</p>
+                    </div>
+                  ) : systemScore.recommendations.map((rec, idx) => (
+                    <div key={idx} className="flex items-start gap-2 p-3 bg-slate-50 rounded-lg">
+                      <span className="text-amber-500 mt-0.5">⚠</span>
+                      <div>
+                        <p className="text-sm font-medium text-slate-700">{rec.title}</p>
+                        <p className="text-xs text-slate-500">{rec.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              </React.Fragment>
               )}
             </div>
           </>)}
