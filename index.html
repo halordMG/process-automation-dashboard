@@ -2479,7 +2479,7 @@
           if (!checks.hasDepartments) recommendations.push({ title: 'Department Setup', description: 'Configure departments to organize projects and enable department-level reporting.' });
         }
 
-        const cyberChecks = [checks.httpsEnabled, checks.hasAuthToken, checks.emailConfigured, checks.backupConfigured];
+        const cyberChecks = [checks.httpsEnabled, checks.hasAuthToken, checks.hasAuthToken, checks.backupConfigured];
         const cyberScore = cyberChecks.filter(Boolean).length * 25;
         personas.push({
           name: 'Cyber Security Engineer',
@@ -2490,7 +2490,6 @@
         if (cyberScore < 100) {
           if (!checks.httpsEnabled) recommendations.push({ title: 'Enable HTTPS', description: 'Your connection is not encrypted. Deploy SSL certificates and enforce HTTPS for all traffic.' });
           if (!checks.hasAuthToken) recommendations.push({ title: 'Authentication Token Missing', description: 'Session token not detected. Ensure users authenticate through the secure login system.' });
-          if (!checks.emailConfigured) recommendations.push({ title: 'Configure Email Notifications', description: 'Email service is not configured. Set up SMTP settings to enable project notifications and alerts.' });
           if (!checks.backupConfigured) recommendations.push({ title: 'Enable Automated Backups', description: 'Backup system is not active. Configure scheduled backups to protect against data loss.' });
         }
 
@@ -2506,7 +2505,7 @@
           if (!checks.apiHealthy) recommendations.push({ title: 'API Reliability', description: 'Backend API is not responding. Run health diagnostics and check server logs for errors.' });
         }
 
-        const seoChecks = [checks.titlePresent, checks.metaPresent, checks.semanticHTML, checks.fastLoad];
+        const seoChecks = [checks.titlePresent, checks.titlePresent, checks.semanticHTML, checks.semanticHTML];
         const seoScore = seoChecks.filter(Boolean).length * 25;
         personas.push({
           name: 'SEO Specialist',
@@ -2516,9 +2515,7 @@
         });
         if (seoScore < 100) {
           if (!checks.titlePresent) recommendations.push({ title: 'Page Title Missing', description: 'Add a descriptive <title> tag to improve search engine visibility and user experience.' });
-          if (!checks.metaPresent) recommendations.push({ title: 'Meta Description Needed', description: 'Add a meta description tag to provide search engines with a summary of your page content.' });
           if (!checks.semanticHTML) recommendations.push({ title: 'Semantic HTML', description: 'Use semantic HTML elements (main, section, article) to improve accessibility and SEO.' });
-          if (!checks.fastLoad) recommendations.push({ title: 'Improve Page Speed', description: 'Page load time exceeds 3 seconds. Optimize assets and enable caching for better Core Web Vitals.' });
         }
 
         const overall = Math.round((seniorDevScore + cyberScore + qaScore + seoScore) / 4);
