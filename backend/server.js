@@ -800,15 +800,30 @@ async function initBackupTable() {
           store_local BOOLEAN DEFAULT true,
           upload_ftp BOOLEAN DEFAULT false,
           email_offsite BOOLEAN DEFAULT false,
+          sync_oss BOOLEAN DEFAULT false,
           ftp_host VARCHAR(255),
           ftp_user VARCHAR(255),
           ftp_pass VARCHAR(255),
           ftp_path VARCHAR(255),
           email_to VARCHAR(255),
+          oss_access_key_id VARCHAR(255),
+          oss_access_key_secret VARCHAR(255),
+          oss_bucket VARCHAR(255),
+          oss_region VARCHAR(100),
+          oss_endpoint VARCHAR(255),
+          oss_path VARCHAR(255),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      // Add OSS columns to existing tables
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS sync_oss BOOLEAN DEFAULT false`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS oss_access_key_id VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS oss_access_key_secret VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS oss_bucket VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS oss_region VARCHAR(100)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS oss_endpoint VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN IF NOT EXISTS oss_path VARCHAR(255)`).catch(() => {});
     } else {
       await db.query(`
         CREATE TABLE IF NOT EXISTS backup_settings (
@@ -821,15 +836,30 @@ async function initBackupTable() {
           store_local INTEGER DEFAULT 1,
           upload_ftp INTEGER DEFAULT 0,
           email_offsite INTEGER DEFAULT 0,
+          sync_oss INTEGER DEFAULT 0,
           ftp_host VARCHAR(255),
           ftp_user VARCHAR(255),
           ftp_pass VARCHAR(255),
           ftp_path VARCHAR(255),
           email_to VARCHAR(255),
+          oss_access_key_id VARCHAR(255),
+          oss_access_key_secret VARCHAR(255),
+          oss_bucket VARCHAR(255),
+          oss_region VARCHAR(100),
+          oss_endpoint VARCHAR(255),
+          oss_path VARCHAR(255),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      // Add OSS columns to existing tables (MySQL)
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN sync_oss INTEGER DEFAULT 0`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN oss_access_key_id VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN oss_access_key_secret VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN oss_bucket VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN oss_region VARCHAR(100)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN oss_endpoint VARCHAR(255)`).catch(() => {});
+      await db.query(`ALTER TABLE backup_settings ADD COLUMN oss_path VARCHAR(255)`).catch(() => {});
     }
     console.log('[Backup] Settings table ready');
   } catch (err) {
@@ -850,11 +880,18 @@ async function getBackupSettings() {
     storeLocal: bool(row.store_local),
     uploadFtp: bool(row.upload_ftp),
     emailOffsite: bool(row.email_offsite),
+    syncOss: bool(row.sync_oss),
     ftpHost: row.ftp_host || '',
     ftpUser: row.ftp_user || '',
     ftpPass: row.ftp_pass || '',
     ftpPath: row.ftp_path || '',
     emailTo: row.email_to || '',
+    ossAccessKeyId: row.oss_access_key_id || '',
+    ossAccessKeySecret: row.oss_access_key_secret || '',
+    ossBucket: row.oss_bucket || '',
+    ossRegion: row.oss_region || '',
+    ossEndpoint: row.oss_endpoint || '',
+    ossPath: row.oss_path || '',
   };
 }
 
@@ -970,11 +1007,18 @@ app.get('/api/backup/settings', authMiddleware, rbac.requirePermission('settings
         storeLocal: true,
         uploadFtp: false,
         emailOffsite: false,
+        syncOss: false,
         ftpHost: '',
         ftpUser: '',
         ftpPass: '',
         ftpPath: '',
         emailTo: '',
+        ossAccessKeyId: '',
+        ossAccessKeySecret: '',
+        ossBucket: '',
+        ossRegion: '',
+        ossEndpoint: '',
+        ossPath: '',
       });
     }
     res.json(settings);
@@ -988,8 +1032,9 @@ app.post('/api/backup/settings', authMiddleware, rbac.requirePermission('setting
   try {
     const {
       enabled, frequency, runTime, timezone, retentionDays,
-      storeLocal, uploadFtp, emailOffsite,
-      ftpHost, ftpUser, ftpPass, ftpPath, emailTo
+      storeLocal, uploadFtp, emailOffsite, syncOss,
+      ftpHost, ftpUser, ftpPass, ftpPath, emailTo,
+      ossAccessKeyId, ossAccessKeySecret, ossBucket, ossRegion, ossEndpoint, ossPath
     } = req.body;
 
     const p = db.isPostgres();
@@ -1007,24 +1052,33 @@ app.post('/api/backup/settings', authMiddleware, rbac.requirePermission('setting
           store_local = ${p ? '$6' : '?'},
           upload_ftp = ${p ? '$7' : '?'},
           email_offsite = ${p ? '$8' : '?'},
-          ftp_host = ${p ? '$9' : '?'},
-          ftp_user = ${p ? '$10' : '?'},
-          ftp_pass = ${p ? '$11' : '?'},
-          ftp_path = ${p ? '$12' : '?'},
-          email_to = ${p ? '$13' : '?'},
+          sync_oss = ${p ? '$9' : '?'},
+          ftp_host = ${p ? '$10' : '?'},
+          ftp_user = ${p ? '$11' : '?'},
+          ftp_pass = ${p ? '$12' : '?'},
+          ftp_path = ${p ? '$13' : '?'},
+          email_to = ${p ? '$14' : '?'},
+          oss_access_key_id = ${p ? '$15' : '?'},
+          oss_access_key_secret = ${p ? '$16' : '?'},
+          oss_bucket = ${p ? '$17' : '?'},
+          oss_region = ${p ? '$18' : '?'},
+          oss_endpoint = ${p ? '$19' : '?'},
+          oss_path = ${p ? '$20' : '?'},
           updated_at = ${p ? 'CURRENT_TIMESTAMP' : 'CURRENT_TIMESTAMP'}
-        WHERE id = ${p ? '$14' : '?'}
+        WHERE id = ${p ? '$21' : '?'}
       `, [intVal(enabled), frequency || 'Daily', runTime || '02:00', timezone || 'Asia/Manila', parseInt(retentionDays) || 7,
-          intVal(storeLocal), intVal(uploadFtp), intVal(emailOffsite),
+          intVal(storeLocal), intVal(uploadFtp), intVal(emailOffsite), intVal(syncOss),
           ftpHost || '', ftpUser || '', ftpPass || '', ftpPath || '', emailTo || '',
+          ossAccessKeyId || '', ossAccessKeySecret || '', ossBucket || '', ossRegion || '', ossEndpoint || '', ossPath || '',
           existing.id]);
     } else {
       await run(`
-        INSERT INTO backup_settings (enabled, frequency, run_time, timezone, retention_days, store_local, upload_ftp, email_offsite, ftp_host, ftp_user, ftp_pass, ftp_path, email_to)
-        VALUES ${p ? '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)' : '(?,?,?,?,?,?,?,?,?,?,?,?,?)'}
+        INSERT INTO backup_settings (enabled, frequency, run_time, timezone, retention_days, store_local, upload_ftp, email_offsite, sync_oss, ftp_host, ftp_user, ftp_pass, ftp_path, email_to, oss_access_key_id, oss_access_key_secret, oss_bucket, oss_region, oss_endpoint, oss_path)
+        VALUES ${p ? '($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)' : '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'}
       `, [intVal(enabled), frequency || 'Daily', runTime || '02:00', timezone || 'Asia/Manila', parseInt(retentionDays) || 7,
-          intVal(storeLocal), intVal(uploadFtp), intVal(emailOffsite),
-          ftpHost || '', ftpUser || '', ftpPass || '', ftpPath || '', emailTo || '']);
+          intVal(storeLocal), intVal(uploadFtp), intVal(emailOffsite), intVal(syncOss),
+          ftpHost || '', ftpUser || '', ftpPass || '', ftpPath || '', emailTo || '',
+          ossAccessKeyId || '', ossAccessKeySecret || '', ossBucket || '', ossRegion || '', ossEndpoint || '', ossPath || '']);
     }
 
     res.json({ message: 'Backup settings saved' });
@@ -1059,6 +1113,49 @@ function saveBackupFile(data) {
   const filePath = path.join(backupDir, filename);
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
   return { filename, filePath, backupDir };
+}
+
+async function uploadToOss(filePath, filename, ossConfig) {
+  try {
+    const OSS = require('ali-oss');
+    const client = new OSS({
+      region: ossConfig.ossRegion,
+      accessKeyId: ossConfig.ossAccessKeyId,
+      accessKeySecret: ossConfig.ossAccessKeySecret,
+      bucket: ossConfig.ossBucket,
+      endpoint: ossConfig.ossEndpoint || undefined,
+    });
+
+    const ossPath = ossConfig.ossPath ? `${ossConfig.ossPath.replace(/^\/+|\/+$/g, '')}/${filename}` : filename;
+    const result = await client.put(ossPath, filePath);
+    console.log('[Backup] OSS upload successful:', result.url);
+    return { success: true, url: result.url };
+  } catch (err) {
+    console.error('[Backup] OSS upload failed:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+async function syncBackupsToOss(backupDir, ossConfig) {
+  const fs = require('fs');
+  if (!fs.existsSync(backupDir)) return;
+
+  const files = fs.readdirSync(backupDir).filter(f => /^pad-backup-.*\.json$/.test(f));
+  let uploaded = 0;
+  let failed = 0;
+
+  for (const file of files) {
+    const filePath = path.join(backupDir, file);
+    const result = await uploadToOss(filePath, file, ossConfig);
+    if (result.success) {
+      uploaded++;
+    } else {
+      failed++;
+    }
+  }
+
+  console.log(`[Backup] OSS sync complete: ${uploaded} uploaded, ${failed} failed`);
+  return { uploaded, failed };
 }
 
 async function cleanupOldBackups(backupDir, retentionDays) {
@@ -1099,6 +1196,12 @@ async function runScheduledBackup() {
     const { filename, filePath, backupDir } = saveBackupFile(data);
     await cleanupOldBackups(backupDir, settings.retentionDays);
 
+    // Sync to OSS if enabled
+    if (settings.syncOss && settings.ossAccessKeyId && settings.ossBucket) {
+      console.log('[Backup] Syncing to Alibaba Cloud OSS...');
+      await syncBackupsToOss(backupDir, settings);
+    }
+
     const systemUser = await get(`SELECT id, full_name FROM users WHERE role = ${db.isPostgres() ? '$1' : '?'} ORDER BY id LIMIT 1`, ['admin']);
     await run(`
       INSERT INTO activity_logs (user_id, user_name, action_type, description)
@@ -1126,6 +1229,12 @@ app.post('/api/backup/run', authMiddleware, rbac.requirePermission('settings', '
     const settings = await getBackupSettings();
     if (settings && settings.retentionDays > 0) {
       await cleanupOldBackups(backupDir, settings.retentionDays);
+    }
+
+    // Sync to OSS if enabled
+    if (settings && settings.syncOss && settings.ossAccessKeyId && settings.ossBucket) {
+      console.log('[Backup] Syncing to Alibaba Cloud OSS...');
+      await syncBackupsToOss(backupDir, settings);
     }
 
     await run(`

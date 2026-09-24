@@ -2837,6 +2837,10 @@
                         <input type="checkbox" checked={!!backupSettings.emailOffsite} onChange={e => handleBackupChange('emailOffsite', e.target.checked)} className="w-4 h-4 text-primary-600 rounded border-slate-300 focus:ring-primary-500" />
                         <span className="text-sm text-slate-700">Email Offsite</span>
                       </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={!!backupSettings.syncOss} onChange={e => handleBackupChange('syncOss', e.target.checked)} className="w-4 h-4 text-primary-600 rounded border-slate-300 focus:ring-primary-500" />
+                        <span className="text-sm text-slate-700">Sync to Cloud (Alibaba OSS)</span>
+                      </label>
                     </div>
                   </div>
 
@@ -2865,6 +2869,42 @@
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Offsite Email</label>
                       <input type="email" value={backupSettings.emailTo || ''} onChange={e => handleBackupChange('emailTo', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="admin@company.com" />
+                    </div>
+                  )}
+
+                  {backupSettings.syncOss && (
+                    <div className="p-4 bg-blue-50 rounded-lg space-y-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+                        <h4 className="text-sm font-semibold text-blue-900">Alibaba Cloud OSS Configuration</h4>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">AccessKey ID</label>
+                          <input type="text" value={backupSettings.ossAccessKeyId || ''} onChange={e => handleBackupChange('ossAccessKeyId', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="LTAI..." />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">AccessKey Secret</label>
+                          <input type="password" value={backupSettings.ossAccessKeySecret || ''} onChange={e => handleBackupChange('ossAccessKeySecret', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="Secret key" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Bucket Name</label>
+                          <input type="text" value={backupSettings.ossBucket || ''} onChange={e => handleBackupChange('ossBucket', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="pad-backups" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Region</label>
+                          <input type="text" value={backupSettings.ossRegion || ''} onChange={e => handleBackupChange('ossRegion', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="oss-ap-southeast-1" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Endpoint (optional)</label>
+                          <input type="text" value={backupSettings.ossEndpoint || ''} onChange={e => handleBackupChange('ossEndpoint', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="https://oss-ap-southeast-1.aliyuncs.com" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">OSS Path (optional)</label>
+                          <input type="text" value={backupSettings.ossPath || ''} onChange={e => handleBackupChange('ossPath', e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" placeholder="backups/pad" />
+                        </div>
+                      </div>
+                      <p className="text-xs text-blue-700">Backups will be synced to Alibaba Cloud OSS after each backup. All existing backups will be uploaded.</p>
                     </div>
                   )}
 
