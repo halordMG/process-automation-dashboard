@@ -2401,6 +2401,22 @@
       const [backupImporting, setBackupImporting] = useState(false);
       const [backupMessage, setBackupMessage] = useState(null);
 
+      // Backup History state
+      const [backupHistory, setBackupHistory] = useState([]);
+      const [historyLoading, setHistoryLoading] = useState(false);
+
+      const loadBackupHistory = async () => {
+        try {
+          setHistoryLoading(true);
+          const data = await api.request('/backup/history');
+          setBackupHistory(Array.isArray(data) ? data : []);
+        } catch (err) {
+          console.error('Load backup history error:', err);
+        } finally {
+          setHistoryLoading(false);
+        }
+      };
+
       // System Health Score state
       const [systemScore, setSystemScore] = useState({ overall: 0, personas: [], recommendations: [] });
       const [scoreLoading, setScoreLoading] = useState(false);
@@ -2408,6 +2424,7 @@
       useEffect(() => {
         if (isAdmin) {
           loadBackupSettings();
+          loadBackupHistory();
           calculateSystemScore();
         }
       }, [isAdmin]);
@@ -2926,6 +2943,54 @@
                 </div>
               ) : (
                 <p className="text-sm text-slate-400">Failed to load backup settings.</p>
+              )}
+            </div>
+
+            {/* Backup History Section */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ICONS.Clock className="w-5 h-5 text-primary-600" />
+                  <h3 className="text-sm font-semibold text-slate-700">Backup History</h3>
+                </div>
+                <button onClick={loadBackupHistory} disabled={historyLoading} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-primary-600 hover:text-primary-700 hover:bg-primary-50 rounded-lg transition-colors disabled:opacity-50" aria-label="Refresh backup history">
+                  <ICONS.Refresh className={`w-3.5 h-3.5 ${historyLoading ? 'animate-spin' : ''}`} />
+                  {historyLoading ? 'Loading...' : 'Refresh'}
+                </button>
+              </div>
+
+              {backupHistory.length === 0 ? (
+                <div className="text-center py-8">
+                  <ICONS.Clock className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm text-slate-400">No backup history yet. Run a backup to get started.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100">
+                        <th className="text-left py-2 px-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Timestamp</th>
+                        <th className="text-left py-2 px-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
+                        <th className="text-left py-2 px-3 text-xs font-medium text-slate-500 uppercase tracking-wider">Result</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {backupHistory.map((entry, idx) => (
+                        <tr key={entry.id || idx} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                          <td className="py-3 px-3 text-slate-700 whitespace-nowrap">
+                            {new Date(entry.created_at).toLocaleString('en-US', { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${entry.status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                              {entry.status}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-slate-600 text-xs break-all">{entry.result || entry.filename || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 

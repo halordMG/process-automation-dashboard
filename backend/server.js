@@ -865,6 +865,38 @@ async function initBackupTable() {
   } catch (err) {
     console.error('[Backup] Failed to create settings table:', err.message);
   }
+
+  // Create backup_history table
+  try {
+    if (p) {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS backup_history (
+          id SERIAL PRIMARY KEY,
+          triggered_by VARCHAR(100),
+          status VARCHAR(20),
+          filename VARCHAR(255),
+          file_path TEXT,
+          result TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    } else {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS backup_history (
+          id INTEGER PRIMARY KEY AUTO_INCREMENT,
+          triggered_by VARCHAR(100),
+          status VARCHAR(20),
+          filename VARCHAR(255),
+          file_path TEXT,
+          result TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    }
+    console.log('[Backup] History table ready');
+  } catch (err) {
+    console.error('[Backup] Failed to create history table:', err.message);
+  }
 }
 
 async function getBackupSettings() {
@@ -1115,6 +1147,29 @@ function saveBackupFile(data) {
   return { filename, filePath, backupDir };
 }
 
+async function recordBackupHistory(triggeredBy, status, filename, filePath, result) {
+  try {
+    const p = db.isPostgres();
+    await run(`
+      INSERT INTO backup_history (triggered_by, status, filename, file_path, result)
+      VALUES ${p ? '($1,$2,$3,$4,$5)' : '(?,?,?,?,?)'}
+    `, [triggeredBy || 'Unknown', status, filename || '', filePath || '', result || '']);
+  } catch (err) {
+    console.error('[Backup] Failed to record history:', err.message);
+  }
+}
+
+app.get('/api/backup/history', authMiddleware, rbac.requirePermission('settings', 'read'), async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const rows = await all(`SELECT * FROM backup_history ORDER BY created_at DESC LIMIT ${db.isPostgres() ? '$1' : '?'}`, [limit]);
+    res.json(rows || []);
+  } catch (err) {
+    console.error('Get backup history error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function uploadToOss(filePath, filename, ossConfig) {
   try {
     const OSS = require('ali-oss');
@@ -1208,10 +1263,13 @@ async function runScheduledBackup() {
       VALUES ${db.isPostgres() ? '($1,$2,$3,$4)' : '(?,?,?,?)'}
     `, [systemUser ? systemUser.id : null, systemUser ? systemUser.full_name : 'Scheduler', 'general', `Scheduled backup created: ${filename}`]);
 
+    await recordBackupHistory('Scheduler', 'success', filename, filePath, `Local backup saved to ${filePath}`);
+
     runScheduledBackup.lastRunDate = currentDate;
     console.log('[Backup] Scheduled backup completed:', filename);
   } catch (err) {
     console.error('[Backup] Scheduled backup failed:', err.message);
+    await recordBackupHistory('Scheduler', 'failed', '', '', err.message);
   }
 }
 
@@ -1242,9 +1300,12 @@ app.post('/api/backup/run', authMiddleware, rbac.requirePermission('settings', '
       VALUES ${db.isPostgres() ? '($1,$2,$3,$4)' : '(?,?,?,?)'}
     `, [req.user.id, req.user.name || req.user.full_name, 'general', `Manual backup created: ${filename}`]);
 
+    await recordBackupHistory(req.user.full_name || req.user.name || req.user.username, 'success', filename, filePath, `Local backup saved to ${filePath}`);
+
     res.json({ message: 'Backup created', filename, path: filePath });
   } catch (err) {
     console.error('Run backup error:', err);
+    await recordBackupHistory(req.user?.full_name || req.user?.name || req.user?.username || 'Unknown', 'failed', '', '', err.message);
     res.status(500).json({ error: err.message });
   }
 });
