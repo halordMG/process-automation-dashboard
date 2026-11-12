@@ -658,6 +658,7 @@ app.get('/api/settings/email', authMiddleware, rbac.requirePermission('settings'
     }
     // Don't return password in plain text for security
     const masked = { ...settings, smtpPass: settings.smtpPass ? '********' : '' };
+    masked.warnings = emailService.validateSettings(settings);
     res.json(masked);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -673,7 +674,7 @@ app.post('/api/settings/email', authMiddleware, rbac.requirePermission('settings
     const existing = await emailService.loadSettings();
     const finalPass = smtpPass === '********' && existing ? existing.smtpPass : smtpPass;
 
-    await emailService.saveSettings({
+    const saved = {
       smtpHost: smtpHost || 'smtp.zoho.com',
       smtpPort: parseInt(smtpPort) || 587,
       smtpSecure: !!smtpSecure,
@@ -682,9 +683,11 @@ app.post('/api/settings/email', authMiddleware, rbac.requirePermission('settings
       fromName: fromName || 'Process Automation Dashboard',
       fromEmail: fromEmail || '',
       enabled: !!enabled,
-    });
+    };
 
-    res.json({ message: 'Email settings saved successfully' });
+    await emailService.saveSettings(saved);
+
+    res.json({ message: 'Email settings saved successfully', warnings: emailService.validateSettings(saved) });
   } catch (err) {
     console.error('Save email settings error:', err);
     res.status(500).json({ error: err.message });

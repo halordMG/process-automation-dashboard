@@ -82,13 +82,53 @@ async function saveSettings(settings) {
 }
 
 /**
+ * Port 465 is implicit TLS and requires secure=true; 587 and 25 are STARTTLS and
+ * require secure=false. The UI lets an admin save the mismatch, which makes
+ * Nodemailer fail with the unhelpful "Unexpected socket close".
+ */
+function resolveSecure(port, requested) {
+  const p = parseInt(port, 10);
+  let expected;
+  if (p === 465) expected = true;
+  else if (p === 587 || p === 25) expected = false;
+  else return !!requested;
+
+  if (!!requested !== expected) {
+    console.warn(`[Email] Correcting secure=${!!requested} to secure=${expected} for port ${p}`);
+  }
+  return expected;
+}
+
+/**
+ * Non-fatal configuration checks surfaced to the admin UI.
+ */
+function validateSettings(settings) {
+  const warnings = [];
+  if (!settings) return warnings;
+
+  const port = parseInt(settings.smtpPort, 10);
+  if (settings.enabled && !settings.smtpHost) {
+    warnings.push('Email is enabled but no SMTP host is set — nothing will actually be delivered.');
+  }
+  if (port === 465 && !settings.smtpSecure) {
+    warnings.push('Port 465 is implicit TLS and needs "Use SSL/TLS" checked. It will be applied automatically on send.');
+  } else if ((port === 587 || port === 25) && settings.smtpSecure) {
+    warnings.push(`Port ${port} is STARTTLS and must have "Use SSL/TLS" unchecked. It will be applied automatically on send.`);
+  }
+  if (settings.fromEmail && settings.smtpUser && settings.fromEmail !== settings.smtpUser) {
+    warnings.push('Zoho rejects mail whose From address is not the authenticated mailbox. Set From Address to the same address as the SMTP username.');
+  }
+  return warnings;
+}
+
+/**
  * Create a nodemailer transporter from settings
  */
 function createTransporter(settings) {
   return nodemailer.createTransport({
     host: settings.smtpHost,
     port: settings.smtpPort,
-    secure: settings.smtpSecure,
+    secure: resolveSecure(settings.smtpPort, settings.smtpSecure),
     auth: {
       user: settings.smtpUser,
       pass: settings.smtpPass,
@@ -97,6 +137,27 @@ function createTransporter(settings) {
       rejectUnauthorized: false,
     },
   });
+}
+
+/**
+ * Deliver one message per recipient so addresses are never exposed to each
+ * other, and aggregate partial failures instead of reporting blanket success.
+ */
+async function sendToRecipients(transporter, mail, recipients) {
+  const failures = [];
+  let sent = 0;
+  for (const recipient of recipients) {
+    try {
+      await transporter.sendMail({ ...mail, to: recipient });
+      sent += 1;
+    } catch (err) {
+      failures.push(`${recipient}: ${err.message}`);
+    }
+  }
+  if (failures.length) {
+    throw new Error(`Failed to send to ${failures.length}/${recipients.length} recipients: ${failures.join('; ')}`);
+  }
+  return sent;
 }
 
 /**
@@ -163,14 +224,13 @@ async function sendProjectNotification(project, recipients, settings, senderName
     </div>
   `;
 
-  const info = await transporter.sendMail({
+  const sent = await sendToRecipients(transporter, {
     from: `"${settings.fromName}" <${settings.fromEmail}>`,
-    to: recipients.join(', '),
     subject: `Project Update: ${project.project_name} — ${project.status}`,
     html,
-  });
+  }, recipients);
 
-  return { message: 'Notification sent', messageId: info.messageId, recipients: recipients.length };
+  return { message: `Notification sent to ${sent} recipient(s)`, recipients: sent };
 }
 
 /**
@@ -216,14 +276,13 @@ async function sendOverdueAlert(projects, recipients, settings, senderName) {
     </div>
   `;
 
-  const info = await transporter.sendMail({
+  const sent = await sendToRecipients(transporter, {
     from: `"${settings.fromName}" <${settings.fromEmail}>`,
-    to: recipients.join(', '),
     subject: `Overdue Alert: ${projects.length} Project(s) Need Attention`,
     html,
-  });
+  }, recipients);
 
-  return { message: 'Overdue alert sent', messageId: info.messageId, recipients: recipients.length };
+  return { message: `Overdue alert sent to ${sent} recipient(s)`, recipients: sent };
 }
 
 module.exports = {
@@ -232,4 +291,5 @@ module.exports = {
   sendTestEmail,
   sendProjectNotification,
   sendOverdueAlert,
+  validateSettings,
 };
